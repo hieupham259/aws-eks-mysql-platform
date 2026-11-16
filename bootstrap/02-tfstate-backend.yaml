@@ -1,0 +1,122 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Terraform state backend: one S3 bucket and one KMS key per AWS account.
+  Deployed by the bootstrap workflow. State locking uses the S3 lock file
+  (use_lockfile), so there is no DynamoDB table.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aws-eks-mysql-platform
+    AllowedPattern: '^[a-z][a-z0-9-]{1,38}[a-z0-9]$'
+    ConstraintDescription: Lowercase letters, digits and hyphens, 3 to 40 characters.
+    Description: Project name. It prefixes the state bucket name and the KMS alias, as written in envs/*/backend.tf.
+
+Resources:
+  # Retained on stack deletion: losing the key makes every state file unreadable.
+  TfstateKmsKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub 'Encrypts the Terraform state of ${ProjectName}'
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          # Delegates access control to IAM policies in this account.
+          - Sid: EnableIamPolicies
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+      Tags:
+        - { Key: Project, Value: !Ref ProjectName }
+        - { Key: ManagedBy, Value: cloudformation }
+        - { Key: Component, Value: tfstate-backend }
+
+  TfstateKmsAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${ProjectName}-tfstate'
+      TargetKeyId: !Ref TfstateKmsKey
+
+  # Retained on stack deletion: the bucket holds the state of every environment.
+  TfstateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub '${ProjectName}-tfstate-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt TfstateKmsKey.Arn
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-state
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - { Key: Project, Value: !Ref ProjectName }
+        - { Key: ManagedBy, Value: cloudformation }
+        - { Key: Component, Value: tfstate-backend }
+
+  TfstateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TfstateBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt TfstateBucket.Arn
+              - !Sub '${TfstateBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+          # Terraform sends this header because the backend sets encrypt = true
+          # together with kms_key_id.
+          - Sid: DenyUnencryptedUploads
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:PutObject'
+            Resource: !Sub '${TfstateBucket.Arn}/*'
+            Condition:
+              StringNotEquals:
+                's3:x-amz-server-side-encryption': 'aws:kms'
+
+Outputs:
+  BucketName:
+    Description: Terraform state bucket name
+    Value: !Ref TfstateBucket
+
+  BucketArn:
+    Description: Terraform state bucket ARN
+    Value: !GetAtt TfstateBucket.Arn
+
+  KmsKeyArn:
+    Description: ARN of the KMS key that encrypts the state
+    Value: !GetAtt TfstateKmsKey.Arn
+
+  KmsKeyAlias:
+    Description: Alias of the KMS key, as referenced by the Terraform backend block
+    Value: !Ref TfstateKmsAlias

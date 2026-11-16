@@ -1,0 +1,26 @@
+# Terraform working files
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+*.tfplan
+plan.txt
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Committed on purpose, do not add them here:
+#   .terraform.lock.hcl   pins provider versions and checksums
+#   terraform.tfvars      non-secret settings of each environment
+
+# Local workflow checks with act
+.act-logs/
+.act-secrets
+.secrets
+
+# Local files
+.env
+.DS_Store

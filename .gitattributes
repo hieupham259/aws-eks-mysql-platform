@@ -1,0 +1,4 @@
+# Store text files with LF in the repository, whatever the editor or the
+# operating system uses. GitHub runners are Linux.
+* text=auto
+*.sh text eol=lf

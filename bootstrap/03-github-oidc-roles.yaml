@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  IAM roles assumed by the Terraform workflows through GitHub Actions OIDC.
+  Deployed by the bootstrap workflow, after the state backend stack.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aws-eks-mysql-platform
+    AllowedPattern: '^[a-z][a-z0-9-]{1,38}[a-z0-9]$'
+    ConstraintDescription: Lowercase letters, digits and hyphens, 3 to 40 characters.
+    Description: Project name. It prefixes every IAM role name; the workflows refer to the roles by their full names.
+
+  OidcSubjectPrefix:
+    Type: String
+    AllowedPattern: '^repo:[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?$'
+    ConstraintDescription: Must look like repo:OWNER@OWNER_ID/REPO@REPO_ID, or repo:OWNER/REPO for a legacy repository.
+    Description: >-
+      Start of the OIDC "sub" claim this repository emits. Same value as in
+      the trust anchor stack; the workflow passes the OIDC_SUBJECT_PREFIX
+      repository variable.
+
+  TfstateBucketArn:
+    Type: String
+    Description: ARN of the Terraform state bucket (output of the state backend stack)
+
+  TfstateKmsKeyArn:
+    Type: String
+    Description: ARN of the KMS key that encrypts the state (output of the state backend stack)
+
+Resources:
+  # Read-only role for "terraform plan": pull requests and drift detection.
+  # It reads the state and takes the state lock, but cannot write the state.
+  GhaPlanRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-gha-plan'
+      Description: Read-only role for terraform plan in pull requests and drift detection.
+      MaxSessionDuration: 3600
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/ReadOnlyAccess'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+                # One entry per context that runs a plan without an environment:
+                # pull requests (terraform-plan.yaml) and the default branch
+                # (terraform-drift.yaml, scheduled or started by hand).
+                'token.actions.githubusercontent.com:sub':
+                  - !Sub '${OidcSubjectPrefix}:pull_request'
+                  - !Sub '${OidcSubjectPrefix}:ref:refs/heads/main'
+      Policies:
+        - PolicyName: tfstate-read-and-lock
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ListStateBucket
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Ref TfstateBucketArn
+              - Sid: ReadState
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${TfstateBucketArn}/${ProjectName}/*/terraform.tfstate'
+              - Sid: TakeAndReleaseStateLock
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub '${TfstateBucketArn}/${ProjectName}/*/terraform.tfstate.tflock'
+              - Sid: UseStateKey
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                  - kms:DescribeKey
+                Resource: !Ref TfstateKmsKeyArn
+      Tags:
+        - { Key: Project, Value: !Ref ProjectName }
+        - { Key: ManagedBy, Value: cloudformation }
+        - { Key: Component, Value: github-oidc-roles }
+
+  # Write role for "terraform apply" and "terraform destroy". Assumable only by
+  # a job that runs in a listed GitHub Environment. List an environment here
+  # only after it exists in GitHub with a branch restriction and a required
+  # reviewer: a workflow that names a missing environment makes GitHub create
+  # it without any protection.
+  GhaApplyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-gha-apply'
+      Description: Write role for terraform apply and destroy, limited to protected GitHub Environments.
+      MaxSessionDuration: 3600
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+                # One entry per GitHub Environment that may deploy.
+                'token.actions.githubusercontent.com:sub':
+                  - !Sub '${OidcSubjectPrefix}:environment:development'
+                  - !Sub '${OidcSubjectPrefix}:environment:production'
+      Tags:
+        - { Key: Project, Value: !Ref ProjectName }
+        - { Key: ManagedBy, Value: cloudformation }
+        - { Key: Component, Value: github-oidc-roles }
+
+Outputs:
+  PlanRoleArn:
+    Description: ARN of the read-only plan role
+    Value: !GetAtt GhaPlanRole.Arn
+
+  ApplyRoleArn:
+    Description: ARN of the apply role
+    Value: !GetAtt GhaApplyRole.Arn

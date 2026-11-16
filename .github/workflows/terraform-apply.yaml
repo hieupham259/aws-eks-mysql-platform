@@ -1,0 +1,56 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches: [development, production]
+    paths:
+      - 'envs/**'
+      - 'modules/**'
+      - '.github/workflows/terraform-apply.yaml'
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform-apply-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify envs/development and envs/production are in sync
+        run: bash scripts/verify-envs-in-sync.sh
+
+  apply:
+    needs: sync-check
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/production' && 'production' || 'development' }}
+    env:
+      ENV_DIR: ${{ github.ref == 'refs/heads/production' && 'production' || 'development' }}
+      ACCOUNT_ID: ${{ github.ref == 'refs/heads/production' && vars.PROD_ACCOUNT_ID || vars.DEV_ACCOUNT_ID }}
+    defaults:
+      run:
+        working-directory: envs/${{ env.ENV_DIR }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.13.3
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/aws-eks-mysql-platform-gha-apply
+          aws-region: us-east-1
+
+      - name: Terraform init
+        run: terraform init -no-color
+
+      - name: Terraform plan
+        run: terraform plan -no-color -out=tfplan -input=false
+
+      - name: Terraform apply
+        run: terraform apply -no-color -input=false tfplan

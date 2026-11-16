@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Trust anchor for GitHub Actions OIDC. Creates (or reuses) the account-wide
+  GitHub OIDC provider and creates the bootstrap role. This is the only stack
+  deployed by a human; every other stack is deployed by the bootstrap workflow.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aws-eks-mysql-platform
+    AllowedPattern: '^[a-z][a-z0-9-]{1,38}[a-z0-9]$'
+    ConstraintDescription: Lowercase letters, digits and hyphens, 3 to 40 characters.
+    Description: >-
+      Project name. It prefixes every IAM role name. The workflows refer to
+      the roles by their full names, so change both together.
+
+  OidcSubjectPrefix:
+    Type: String
+    AllowedPattern: '^repo:[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?$'
+    ConstraintDescription: Must look like repo:OWNER@OWNER_ID/REPO@REPO_ID, or repo:OWNER/REPO for a legacy repository.
+    Description: >-
+      Start of the OIDC "sub" claim this repository emits, without the trailing
+      context. Repositories created on or after 2026-07-15 emit the immutable
+      form repo:OWNER@OWNER_ID/REPO@REPO_ID; older ones emit repo:OWNER/REPO.
+      Build it from the two IDs that the GitHub API returns for the repository.
+
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Use false when the account already has an IAM OIDC provider for
+      token.actions.githubusercontent.com. An account can hold only one, and
+      every project in the account shares it.
+
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Resources:
+  # Retained on stack deletion: other projects in the account may trust it.
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  # Assumable only by a job that runs in the GitHub Environment "bootstrap".
+  # That environment must be restricted to the default branch and must have a
+  # required reviewer before this stack is created.
+  GhaBootstrapRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-gha-bootstrap'
+      Description: Assumed by the bootstrap workflow to deploy the state backend and the CI roles.
+      MaxSessionDuration: 3600
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+                'token.actions.githubusercontent.com:sub': !Sub '${OidcSubjectPrefix}:environment:bootstrap'
+      Tags:
+        - { Key: Project, Value: !Ref ProjectName }
+        - { Key: ManagedBy, Value: cloudformation }
+        - { Key: Component, Value: trust-anchor }
+
+Outputs:
+  OidcProviderArn:
+    Description: ARN of the GitHub Actions OIDC provider that the roles trust
+    Value: !If
+      - ShouldCreateOidcProvider
+      - !Ref GitHubOidcProvider
+      - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+
+  BootstrapRoleArn:
+    Description: ARN of the role assumed by the bootstrap workflow
+    Value: !GetAtt GhaBootstrapRole.Arn
+
+  BootstrapRoleSubject:
+    Description: The only OIDC subject allowed to assume the bootstrap role
+    Value: !Sub '${OidcSubjectPrefix}:environment:bootstrap'

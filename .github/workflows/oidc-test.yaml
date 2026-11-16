@@ -1,0 +1,27 @@
+name: OIDC test
+
+on:
+  push:
+    branches: [development, production]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/production' && 'production' || 'development' }}
+    env:
+      ACCOUNT_ID: ${{ github.ref == 'refs/heads/production' && vars.PROD_ACCOUNT_ID || vars.DEV_ACCOUNT_ID }}
+    steps:
+      - name: Print branch
+        run: echo "Running on branch ${{ github.ref_name }}"
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/aws-eks-mysql-platform-gha-apply
+          aws-region: us-east-1
+
+      - name: Verify caller identity
+        run: aws sts get-caller-identity
