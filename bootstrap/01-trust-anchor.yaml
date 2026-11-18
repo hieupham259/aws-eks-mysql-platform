@@ -26,6 +26,7 @@ Parameters:
 
   CreateOidcProvider:
     Type: String
+    Default: 'false'
     AllowedValues: ['true', 'false']
     Description: >-
       Use false when the account already has an IAM OIDC provider for

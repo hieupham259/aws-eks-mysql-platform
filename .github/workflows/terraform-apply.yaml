@@ -27,15 +27,25 @@ jobs:
   apply:
     needs: sync-check
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/production' && 'production' || 'development' }}
+    # The branch name is the environment name. It selects the GitHub
+    # Environment, the envs/<branch> directory and the <branch>_account_id
+    # repository variable.
+    environment: ${{ github.ref_name }}
     env:
-      ENV_DIR: ${{ github.ref == 'refs/heads/production' && 'production' || 'development' }}
-      ACCOUNT_ID: ${{ github.ref == 'refs/heads/production' && vars.PROD_ACCOUNT_ID || vars.DEV_ACCOUNT_ID }}
+      ENV_DIR: ${{ github.ref_name }}
+      ACCOUNT_ID: ${{ vars[format('{0}_account_id', github.ref_name)] }}
     defaults:
       run:
         working-directory: envs/${{ env.ENV_DIR }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Check the account variable
+        run: |
+          if [ -z "${ACCOUNT_ID}" ]; then
+            echo "::error::Repository variable ${GITHUB_REF_NAME}_account_id is not set."
+            exit 1
+          fi
 
       - uses: hashicorp/setup-terraform@v4
         with:

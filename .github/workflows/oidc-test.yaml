@@ -11,12 +11,21 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/production' && 'production' || 'development' }}
+    # The branch name is the environment name. It selects the GitHub
+    # Environment and the <branch>_account_id repository variable.
+    environment: ${{ github.ref_name }}
     env:
-      ACCOUNT_ID: ${{ github.ref == 'refs/heads/production' && vars.PROD_ACCOUNT_ID || vars.DEV_ACCOUNT_ID }}
+      ACCOUNT_ID: ${{ vars[format('{0}_account_id', github.ref_name)] }}
     steps:
       - name: Print branch
         run: echo "Running on branch ${{ github.ref_name }}"
+
+      - name: Check the account variable
+        run: |
+          if [ -z "${ACCOUNT_ID}" ]; then
+            echo "::error::Repository variable ${GITHUB_REF_NAME}_account_id is not set."
+            exit 1
+          fi
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:

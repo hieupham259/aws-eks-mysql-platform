@@ -403,8 +403,8 @@ aws s3api list-buckets --query "Buckets[?contains(Name, 'tfstate') || contains(N
 
 - [ ] Terraform đang quản lý 13 resource ở `development`: 1 parameter thử CI/CD, 8 của mạng, 3 của bucket, 1 parameter tên bucket.
 - [ ] Mọi thay đổi đi qua pull request; không lệnh `aws` nào tạo hay sửa tài nguyên từ máy.
-- [ ] Workflow **Terraform Drift Detection** chạy từ `main`: job của `development` xanh. Job của `production` còn đỏ cho tới khi `production` được deploy.
-- [ ] Đã mở pull request `development` vào `main` và merge.
+- [ ] Workflow **Terraform Drift Detection** chạy từ `master`: job của `development` xanh. Job của `production` còn đỏ cho tới khi `production` được deploy.
+- [ ] Đã mở pull request `development` vào `master` và merge.
 
 ## 8. Thử dò lệch trên tài nguyên thật
 
@@ -417,7 +417,7 @@ aws ec2 modify-subnet-attribute --region "${AWS_REGION}" --subnet-id "${SUBNET_I
 echo "exit=$?"
 ```
 
-**Actions → Terraform Drift Detection → Run workflow** → nhánh `main`. Nếu đã Disable workflow này ở plan 03 thì bật lại trước.
+**Actions → Terraform Drift Detection → Run workflow** → nhánh `master`. Nếu đã Disable workflow này ở plan 03 thì bật lại trước.
 
 **PASS phần phát hiện:** job của `development` đỏ; log của bước plan ghi một subnet `will be updated in-place` với `map_public_ip_on_launch` đổi từ `false` về `true`, và `Plan: 0 to add, 1 to change, 0 to destroy.`
 

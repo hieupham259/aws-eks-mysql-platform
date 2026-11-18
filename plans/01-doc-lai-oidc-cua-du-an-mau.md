@@ -94,7 +94,7 @@ Stack 03 của dự án mẫu còn tạo hai role deploy cho repo ứng dụng, 
 
 **Tách role theo công việc.** Role plan chỉ cần quyền đọc hạ tầng và quyền cần thiết trên backend state. Tách role này giữ quyền quản trị ngoài các job kiểm tra PR và drift. Role bootstrap và role apply hiện cùng có `AdministratorAccess`, nhưng dùng cho hai giai đoạn khác nhau. Tách chúng cho phép đặt điều kiện assume riêng và điều chỉnh quyền từng role độc lập.
 
-**Dự án mới siết trust policy và quyền state.** Role plan và apply của dự án mẫu cùng chấp nhận `repo:<org>/<repo>:*`. Dự án mới liệt kê từng ngữ cảnh được phép. Role plan nhận `:pull_request` và `:ref:refs/heads/main` theo template hiện tại, còn role apply nhận `:environment:development` và `:environment:production`. Với backend state, policy của role plan trong dự án mẫu cho phép ghi cả file `terraform.tfstate`. Dự án mới cấp quyền đọc trên file state và cấp thêm quyền tạo/xoá trên file khoá `.tflock`.
+**Dự án mới siết role apply và quyền state.** Role plan và apply của dự án mẫu cùng chấp nhận `repo:<org>/<repo>:*`. Dự án mới giữ điều kiện đó cho role plan, và siết role apply: job phải khai một Environment, tức `sub` có dạng `:environment:*`, và tên Environment phải nằm trong danh sách lấy từ biến repo `DEPLOY_ENVIRONMENTS`. Với backend state, policy của role plan trong dự án mẫu cho phép ghi cả file `terraform.tfstate`. Dự án mới cấp quyền đọc trên file state và cấp thêm quyền tạo/xoá trên file khoá `.tflock`.
 
 ## 3. Lộ trình đọc
 
@@ -143,7 +143,7 @@ Stack 03 của dự án mẫu còn tạo hai role deploy cho repo ứng dụng, 
   git -C "D:/code/terraform-3-tiers-app/3-tiers-app-infrastructure" show ec629be -- bootstrap/03-github-oidc-roles.yaml
   ```
 
-  Cách sửa đúng là đổi điều kiện thành `...:environment:development`, không phải nới thành `*`. Dự án mới làm theo cách đó.
+  Cách sửa đúng là đổi điều kiện sang dạng `...:environment:<tên>`, không phải nới thành `*`. Dự án mới làm theo hướng đó cho role apply: `sub` phải có dạng `:environment:*`, và tên Environment phải nằm trong một danh sách.
 
 ### Chặng 5: Workflow Terraform dùng role nào
 
@@ -223,7 +223,7 @@ Trust policy viết theo dạng cũ sẽ không khớp, và AWS chỉ báo chung
 
 Dự án mới dùng lại provider có sẵn, và đặt tiền tố tên dự án cho mọi thứ còn lại.
 
-**3. Điều kiện `:*` trên role admin.** Dự án mới ghi rõ từng ngữ cảnh được phép: role bootstrap chỉ nhận `:environment:bootstrap`, role apply chỉ nhận `:environment:development` và `:environment:production`, role plan chỉ nhận pull request và nhánh `main`. Plan 03 chỉ chạy thử trường hợp được vào; nó không có bước thử các trường hợp phải bị từ chối.
+**3. Điều kiện `:*` trên role admin.** Dự án mới giới hạn hai role admin theo Environment: role bootstrap chỉ nhận `:environment:bootstrap`; role apply chỉ nhận job chạy trong một Environment có tên nằm trong biến repo `DEPLOY_ENVIRONMENTS`, lúc đầu là `development,production`. Role plan chỉ đọc nên giữ `:*` như mẫu. Plan 03 chỉ chạy thử trường hợp được vào; nó không có bước thử các trường hợp phải bị từ chối.
 
 ## 7. Câu hỏi tự kiểm
 

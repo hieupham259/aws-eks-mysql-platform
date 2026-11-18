@@ -2,7 +2,7 @@
 
 Tài liệu này kể theo thứ tự thời gian vì sao workflow `terraform-plan.yaml` và `terraform-apply.yaml` của repo `aws-eks-mysql-platform` vào được đúng account AWS, bắt đầu từ lúc chưa có gì.
 
-Đây là bản viết lại của `notes/CICD-CHAIN-OF-TRUST.md` trong dự án mẫu [`3-tiers-app-infrastructure`](https://github.com/hieupham259/3-tiers-app-infrastructure/blob/4de50f9b3d740454eb72c6f957fe9bda0380cdee/notes/CICD-CHAIN-OF-TRUST.md?plain=1), theo code thật của repo này tại ngày **17/11/2026**. Khái niệm nền nằm ở [OIDC-GUIDE.md](OIDC-GUIDE.md); lệnh và chốt kiểm tra từng bước nằm ở [plan 03](../plans/03-trien-khai-oidc-roi-cicd.md).
+Đây là bản viết lại của `notes/CICD-CHAIN-OF-TRUST.md` trong dự án mẫu [`3-tiers-app-infrastructure`](https://github.com/hieupham259/3-tiers-app-infrastructure/blob/4de50f9b3d740454eb72c6f957fe9bda0380cdee/notes/CICD-CHAIN-OF-TRUST.md?plain=1), theo code thật của repo này tại ngày **18/11/2026**. Khái niệm nền nằm ở [OIDC-GUIDE.md](OIDC-GUIDE.md); lệnh và chốt kiểm tra từng bước nằm ở [plan 03](../plans/03-trien-khai-oidc-roi-cicd.md).
 
 Ký hiệu: **`<tiền tố>`** là `repo:<owner>@<owner_id>/aws-eks-mysql-platform@<repo_id>`, giá trị của biến repo `OIDC_SUBJECT_PREFIX`. `<account-id>` là account AWS.
 
@@ -23,11 +23,13 @@ Ký hiệu: **`<tiền tố>`** là `repo:<owner>@<owner_id>/aws-eks-mysql-platf
 
 | Chủ đề | Bản gốc | Bản này |
 |---|---|---|
-| Số account | hai account, làm mọi bước hai lần | hai môi trường `development` và `production`, account chọn theo nhánh như bản gốc. Hai môi trường chung một account thì mốc 1 và mốc 2 chỉ làm một lần |
+| Số account | hai account, làm mọi bước hai lần | hai môi trường `development` và `production`, account lấy từ biến `<TÊN MÔI TRƯỜNG>_ACCOUNT_ID`, tìm theo tên nhánh. Hai môi trường chung một account thì mốc 1 và mốc 2 chỉ làm một lần |
 | Bước trước trust anchor | không có | mốc 0: lấy hai ID của repo, đặt biến, tạo Environment |
 | Trust anchor | upload qua Console | deploy bằng `aws cloudformation deploy` từ máy; dùng lại provider nếu account đã có |
 | Dạng `sub` | `repo:<org>/<repo>:...` | `<tiền tố>:...`, có ID của chủ repo và của repo |
-| Điều kiện của role apply | ghi là theo nhánh `ref:refs/heads/<nhánh>` | theo Environment: `<tiền tố>:environment:development` và `<tiền tố>:environment:production` |
+| Điều kiện của role apply | ghi là theo nhánh `ref:refs/heads/<nhánh>` | theo Environment: `sub` dạng `<tiền tố>:environment:*`, và tên Environment nằm trong biến `DEPLOY_ENVIRONMENTS` |
+| Điều kiện của role plan | `repo:<org>/<repo>:*` | giữ như bản gốc: `<tiền tố>:*` |
+| Chọn môi trường trong workflow | biểu thức "`production` hay không" | dùng thẳng tên nhánh, hoặc tên chọn lúc bấm chạy |
 | Role do bootstrap tạo | bốn role, gồm hai role deploy của repo ứng dụng | hai role: plan và apply |
 | Lỗi khi role chưa tồn tại | `NoSuchEntity ... does not exist` | dự kiến là `Not authorized to perform sts:AssumeRoleWithWebIdentity`, giống khi `sub` không khớp; chưa thấy tận mắt ở repo này |
 | Region | `ap-southeast-1` | `us-east-1` |
@@ -71,14 +73,14 @@ Dưới lớp 0 còn một lớp nữa mà bản gốc không nói tới: phần
 
 Plan 03, bước 1 tới 3.
 
-1. Tạo repo public `aws-eks-mysql-platform`, đẩy code lên `main`.
+1. Tạo repo public `aws-eks-mysql-platform`, đẩy code lên `master`.
 2. Lấy ID của repo và ID của chủ repo từ API công khai của GitHub, rồi ghép thành `<tiền tố>`:
 
    ```text
    repo:<owner>@<owner_id>/aws-eks-mysql-platform@<repo_id>
    ```
-3. Đặt ba biến cấp repo: `DEV_ACCOUNT_ID`, `PROD_ACCOUNT_ID` và `OIDC_SUBJECT_PREFIX`.
-4. Tạo ba Environment, cả ba có người duyệt: `bootstrap` (chỉ nhánh `main`), `development` và `production` (mỗi cái chỉ nhận nhánh cùng tên).
+3. Đặt bốn biến cấp repo: `DEVELOPMENT_ACCOUNT_ID`, `PRODUCTION_ACCOUNT_ID`, `OIDC_SUBJECT_PREFIX` và `DEPLOY_ENVIRONMENTS` (giá trị `development,production`).
+4. Tạo ba Environment, cả ba có người duyệt: `bootstrap` (chỉ nhánh `master`), `development` và `production` (mỗi cái chỉ nhận nhánh cùng tên).
 
 Sau mốc 0: GitHub đã sẵn sàng, AWS chưa có gì của dự án. Chưa job nào vào được AWS.
 
@@ -98,9 +100,9 @@ Sau mốc 1: đúng một loại job vào được AWS, là job chạy trong Env
 
 Plan 03, bước 5.
 
-**Bước A: bấm chạy.** Tab Actions → **Bootstrap (CFN - state backend + OIDC roles)** → Run workflow, nhánh `main`, account `development`.
+**Bước A: bấm chạy.** Tab Actions → **Bootstrap (CFN - state backend + OIDC roles)** → Run workflow, nhánh `master`, account `development`.
 
-**Bước B: Environment chặn lại.** Job khai `environment: bootstrap`. GitHub kiểm hai luật: nhánh `main` được phép, và cần người duyệt. Job đứng chờ tới khi bạn bấm duyệt.
+**Bước B: Environment chặn lại.** Job khai `environment: bootstrap`. GitHub kiểm hai luật: nhánh `master` được phép, và cần người duyệt. Job đứng chờ tới khi bạn bấm duyệt.
 
 **Bước C: job vào role bootstrap.**
 
@@ -112,11 +114,13 @@ Plan 03, bước 5.
     aws-region: ${{ env.AWS_REGION }}
 ```
 
-`ACCOUNT_ID` là biến môi trường của job. Nó được chọn theo account bạn bấm lúc chạy, như ở dự án mẫu:
+`ACCOUNT_ID` là biến môi trường của job. Nó được tìm theo tên account bạn chọn lúc chạy: chọn `development` thì job đọc biến repo `development_account_id`. GitHub lưu tên biến bằng chữ hoa, `DEVELOPMENT_ACCOUNT_ID`, và không phân biệt hoa thường khi đọc.
 
 ```yaml
-ACCOUNT_ID: ${{ inputs.account == 'production' && vars.PROD_ACCOUNT_ID || vars.DEV_ACCOUNT_ID }}
+ACCOUNT_ID: ${{ vars[format('{0}_account_id', inputs.account)] }}
 ```
+
+Trước bước đăng nhập, bước **Check the account variable** dừng job nếu biến đó chưa có.
 
 Chuyện xảy ra phía sau:
 
@@ -140,14 +144,16 @@ Chuyện xảy ra phía sau:
 
 **Bước E: đọc output của stack vừa tạo.** Job lấy ARN của bucket và ARN của KMS key.
 
-**Bước F: deploy stack role.** `bootstrap/03-github-oidc-roles.yaml` nhận `<tiền tố>` và hai ARN trên, tạo hai role:
+**Bước F: deploy stack role.** `bootstrap/03-github-oidc-roles.yaml` nhận `<tiền tố>`, danh sách Environment trong biến `DEPLOY_ENVIRONMENTS` và hai ARN trên, tạo hai role:
 
-| Role | Quyền | `sub` được nhận |
+| Role | Quyền | Job được nhận |
 |---|---|---|
-| `aws-eks-mysql-platform-gha-plan` | `ReadOnlyAccess`; đọc state; ghi và xoá lock file; dùng KMS key của state | `<tiền tố>:pull_request`, `<tiền tố>:ref:refs/heads/main` |
-| `aws-eks-mysql-platform-gha-apply` | `AdministratorAccess` | `<tiền tố>:environment:development`, `<tiền tố>:environment:production` |
+| `aws-eks-mysql-platform-gha-plan` | `ReadOnlyAccess`; đọc state; ghi và xoá lock file; dùng KMS key của state | `sub` khớp `<tiền tố>:*`: mọi ngữ cảnh của repo này |
+| `aws-eks-mysql-platform-gha-apply` | `AdministratorAccess` | `sub` khớp `<tiền tố>:environment:*`, và tên Environment nằm trong `DEPLOY_ENVIRONMENTS` |
 
-Sau mốc 2: account có chỗ lưu state, và hai role cho Terraform. Workflow Bootstrap chỉ chạy lại khi sửa template 02 hoặc 03, hoặc khi production nằm ở một account khác và account đó cần bộ nền riêng.
+Role apply cần cả hai điều kiện. Riêng `sub` dạng `:environment:*` chưa đủ: workflow gọi tên một Environment chưa có thì GitHub tự tạo nó, không có luật nào. Điều kiện thứ hai so tên Environment với danh sách đã chọn.
+
+Sau mốc 2: account có chỗ lưu state, và hai role cho Terraform. Workflow Bootstrap chỉ chạy lại khi sửa template 02 hoặc 03, khi đổi biến `DEPLOY_ENVIRONMENTS`, hoặc khi production nằm ở một account khác và account đó cần bộ nền riêng.
 
 Sau mốc này, plan 03 thử đường vào bằng một pull request: merge vào `development` làm workflow `oidc-test.yaml` chạy, vào role apply và in danh tính nhận được (plan 03, bước 7 và 8).
 
@@ -155,21 +161,21 @@ Sau mốc này, plan 03 thử đường vào bằng một pull request: merge v�
 
 Từ plan 04 trở đi. Tới đây mới là việc lặp lại mỗi ngày, và ba mốc trước là lý do nó chạy được.
 
-**Pull request vào `development` hoặc `production`.** `terraform-plan.yaml` chạy. Job `plan` không khai environment và sự kiện là `pull_request`, nên `sub` là `<tiền tố>:pull_request`. Giá trị này nằm trong danh sách của role plan. Job vào được role chỉ đọc vì:
+**Pull request vào `development` hoặc `production`.** `terraform-plan.yaml` chạy. Job `plan` không khai environment và sự kiện là `pull_request`, nên `sub` là `<tiền tố>:pull_request`. Role plan nhận mọi `sub` bắt đầu bằng `<tiền tố>:`. Job vào được role chỉ đọc vì:
 
 1. provider tồn tại (mốc 1, hoặc có sẵn trong account);
 2. role plan tồn tại (mốc 2);
-3. `sub` của job khớp một dòng trong trust policy.
+3. `sub` của job khớp mẫu `<tiền tố>:*` trong trust policy.
 
 **Merge.** `terraform-apply.yaml` chạy. Sau job `sync-check`, chỉ một job vào AWS, như ở dự án mẫu:
 
 | Job | Khai environment | `sub` | Role |
 |---|---|---|---|
-| `apply` | tên môi trường của nhánh: `development` hoặc `production` | `<tiền tố>:environment:<tên>` | apply |
+| `apply` | tên nhánh vừa nhận push: `development` hoặc `production` | `<tiền tố>:environment:<tên>` | apply |
 
 Job `apply` đứng chờ ở Environment tới khi người duyệt bấm duyệt, rồi mới chạy `init`, `plan` và `apply`.
 
-Một job không chạy trong Environment `development` hay `production` thì không vào được role apply, kể cả khi nó chạy trên nhánh `development`. Điều kiện của role là Environment, không phải nhánh. Việc "chỉ nhánh `development` mới dùng được Environment `development`" do luật nhánh của Environment giữ.
+Một job không chạy trong một Environment có tên trong `DEPLOY_ENVIRONMENTS` thì không vào được role apply, kể cả khi nó chạy trên nhánh `development`. Điều kiện của role là Environment, không phải nhánh. Việc "chỉ nhánh `development` mới dùng được Environment `development`" do luật nhánh của Environment giữ.
 
 ## Hình dung cả chuỗi
 
@@ -203,10 +209,10 @@ Một job không chạy trong Environment `development` hay `production` thì kh
        |  | bucket ...-tfstate-<account-id>, KMS key    (mốc 2) |  |
        |  +-----------------------------------------------------+  |
        |  | role ...-gha-plan                           (mốc 2) |  |
-       |  | nhận: pull_request, nhánh main                      |  |
+       |  | nhận: mọi ngữ cảnh của repo                         |  |
        |  +-----------------------------------------------------+  |
        |  | role ...-gha-apply                          (mốc 2) |  |
-       |  | nhận: environment:development, :production          |  |
+       |  | nhận: Environment trong DEPLOY_ENVIRONMENTS         |  |
        |  +-------------------------+---------------------------+  |
        |                            | workflow terraform-* dùng    |
        |  +-------------------------v---------------------------+  |
@@ -223,12 +229,12 @@ Một job không chạy trong Environment `development` hay `production` thì kh
 | `oidc-test.yaml` | `test` | theo nhánh | `:environment:<tên>` | apply | workflow Bootstrap |
 | `terraform-plan.yaml` | `plan` | không | `:pull_request` | plan | workflow Bootstrap |
 | `terraform-apply.yaml` | `apply` | theo nhánh | `:environment:<tên>` | apply | workflow Bootstrap |
-| `terraform-drift.yaml` | `drift`, mỗi môi trường một job | không | `:ref:refs/heads/main` | plan | workflow Bootstrap |
+| `terraform-drift.yaml` | `drift`, mỗi môi trường một job | không | `:ref:refs/heads/master` | plan | workflow Bootstrap |
 | `terraform-destroy.yaml` | `destroy` | theo ô chọn lúc bấm chạy | `:environment:<tên>` | apply | workflow Bootstrap |
 
 `<tên>` là `development` hoặc `production`. Job `sync-check` của workflow plan và apply chỉ so file trong repo, không vào AWS, nên không có trong bảng.
 
-Workflow drift chạy theo lịch nên dùng file của nhánh mặc định `main`, và `sub` mang tên nhánh `main`. Đó là lý do nhánh `main` có mặt trong danh sách của role plan dù `main` không deploy gì.
+Workflow drift chạy theo lịch nên dùng file của nhánh mặc định `master`, và `sub` mang tên nhánh `master`. Role plan nhận mọi `sub` của repo này, nên cả job plan của pull request lẫn job drift đều vào được.
 
 ## Mỗi thứ chạy thường xuyên tới đâu
 
@@ -275,10 +281,10 @@ Ba thông tin phải cùng chỉ về một chỗ:
 
 ```yaml
 # .github/workflows/terraform-apply.yaml, rút gọn phần của job apply
-environment: ${{ github.ref == 'refs/heads/production' && 'production' || 'development' }}
+environment: ${{ github.ref_name }}
 env:
-  ENV_DIR: ${{ github.ref == 'refs/heads/production' && 'production' || 'development' }}
-  ACCOUNT_ID: ${{ github.ref == 'refs/heads/production' && vars.PROD_ACCOUNT_ID || vars.DEV_ACCOUNT_ID }}
+  ENV_DIR: ${{ github.ref_name }}
+  ACCOUNT_ID: ${{ vars[format('{0}_account_id', github.ref_name)] }}
 defaults:
   run:
     working-directory: envs/${{ env.ENV_DIR }}
@@ -303,15 +309,15 @@ key    = "aws-eks-mysql-platform/development/terraform.tfstate"
 2. **Region** quyết định lời gọi API đi tới đâu. Repo này ghi cứng `us-east-1`.
 3. **State** gồm tên bucket và key, cả hai ghi trong `backend.tf` của thư mục env mà job đang đứng, ở đây là `envs/development`. `terraform init` đọc file đó.
 
-Cách viết này giống dự án mẫu. Những gì quyết định đích đến, không thứ nào do người bấm chạy gõ vào:
+Khung này giống dự án mẫu. Khác ở chỗ tên nhánh được dùng thẳng, không qua biểu thức "`production` hay không". Những gì quyết định đích đến, không thứ nào do người bấm chạy gõ vào:
 
 | Nguồn | Cho ra |
 |---|---|
-| biến repo `DEV_ACCOUNT_ID` và `PROD_ACCOUNT_ID` | account trong ARN của role |
+| biến repo `DEVELOPMENT_ACCOUNT_ID` và `PRODUCTION_ACCOUNT_ID` | account trong ARN của role |
 | tên nhánh | biến account nào được dùng, tên Environment, thư mục `envs/<môi trường>` |
 | tên ghi thẳng trong file | tên role trong workflow; tên bucket và key trong `backend.tf` |
 
-Account ID vì vậy xuất hiện ở hai nơi, biến repo và `backend.tf`, và hai nơi phải khớp nhau cho từng môi trường. Biểu thức chọn theo nhánh coi mọi nhánh không phải `production` là `development`; luật nhánh của Environment là thứ ngăn một nhánh lạ đi tiếp.
+Account ID vì vậy xuất hiện ở hai nơi, biến repo và `backend.tf`, và hai nơi phải khớp nhau cho từng môi trường. Một nhánh lạ không rơi về môi trường nào. Workflow chỉ chạy với các nhánh ghi trong `on:`; biến `<tên nhánh>_account_id` phải tồn tại, nếu không bước **Check the account variable** dừng job; và role apply chỉ nhận Environment có tên trong `DEPLOY_ENVIRONMENTS`.
 
 ## Sơ đồ tuần tự: từ merge tới tài nguyên trên AWS
 
@@ -354,4 +360,4 @@ Bạn              GitHub              Job apply          AWS STS            AWS
 - **Mốc 2, workflow Bootstrap:** dùng role bootstrap để tạo chỗ lưu state và hai role cho Terraform.
 - **Mốc 3, hằng ngày:** pull request dùng role chỉ đọc để plan; merge dùng role ghi để plan rồi apply, sau khi có người duyệt.
 
-Lớp dưới không tồn tại được nếu lớp trên chưa xong. Và ở mọi mốc, thứ quyết định một job có vào được role hay không là chuỗi `sub` của nó.
+Lớp dưới không tồn tại được nếu lớp trên chưa xong. Và ở mọi mốc, thứ quyết định một job có vào được role hay không là các claim trong token của nó: `sub`, và với role apply là thêm `environment`.

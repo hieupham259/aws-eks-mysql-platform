@@ -164,7 +164,7 @@ Hình "Deployments 28" của repo mẫu đếm số lần một job khai `enviro
 
 | # | Chỗ trong dự án mẫu | Hệ quả | Dự án mới |
 |---|---|---|---|
-| 1 | Role apply nhận `repo:<org>/<repo>:*` (plan 01, chặng 4) | cửa duyệt của Environment không được IAM chống lưng: job không khai environment vẫn xin được role admin | **đổi:** role apply chỉ nhận `:environment:development` và `:environment:production` |
+| 1 | Role apply nhận `repo:<org>/<repo>:*` (plan 01, chặng 4) | cửa duyệt của Environment không được IAM chống lưng: job không khai environment vẫn xin được role admin | **đổi:** role apply chỉ nhận job chạy trong một Environment có tên nằm trong biến repo `DEPLOY_ENVIRONMENTS`. Role plan giữ `:*` như mẫu |
 | 2 | Plan và apply chung một job, sau cửa duyệt (`terraform-apply.yaml` dòng 30 và 51–70) | người duyệt bấm Approve khi chưa thấy plan của lần chạy này, chỉ có plan cũ trong pull request | **giữ như mẫu:** một job, duyệt rồi mới plan và apply. Người duyệt đọc plan trong comment của pull request |
 | 3 | Bước comment nhét thẳng output của plan vào mã JavaScript (`terraform-plan.yaml` dòng 92) | plan có dấu `` ` `` hoặc `${` làm hỏng đoạn script | **giữ như mẫu** |
 | 4 | Workflow plan có bộ lọc `paths` (dòng 12–16) | nếu đặt job `plan` làm check bắt buộc, pull request không chạm các đường dẫn đó sẽ treo mãi vì check không bao giờ chạy | **giữ như mẫu:** giữ bộ lọc `paths`, và không đặt job `plan` làm check bắt buộc |
@@ -185,10 +185,10 @@ Hình "Deployments 28" của repo mẫu đếm số lần một job khai `enviro
 - Pull request sinh plan; merge sinh apply; apply đi qua Environment có người duyệt.
 - `envs/<tên>` chỉ chứa phần khác nhau, code chung ở `envs/_shared`.
 - State trên S3 có KMS và khoá bằng lock file.
-- Khung của năm workflow `bootstrap`, `terraform-plan`, `terraform-apply`, `terraform-drift`, `terraform-destroy`: cùng job, cùng thứ tự bước, cùng biểu thức chọn môi trường và account theo nhánh, cùng hai biến `DEV_ACCOUNT_ID` và `PROD_ACCOUNT_ID`.
+- Khung của năm workflow `bootstrap`, `terraform-plan`, `terraform-apply`, `terraform-drift`, `terraform-destroy`: cùng job, cùng thứ tự bước. Mỗi job vào AWS có thêm một bước kiểm biến account.
 - Hai thư mục `envs/development` và `envs/production`, và script `verify-envs-in-sync.sh`.
 
-**Đổi:** các dòng 1, 5, 7, 8 và 9 ở mục 7, cộng ba điều ở mục 6 của plan 01 (dạng `sub` mới, đụng tên trong account, điều kiện `:*`).
+**Đổi:** các dòng 1, 5, 7, 8 và 9 ở mục 7, cộng ba điều ở mục 6 của plan 01 (dạng `sub` mới, đụng tên trong account, điều kiện `:*`). Ngoài ra, dự án mới bỏ kiểu biểu thức "`production` hay không" ở mục 3: tên nhánh được dùng thẳng làm tên Environment, tên thư mục `envs/<tên>` và phần đầu của biến `<TÊN>_ACCOUNT_ID`. Hai biến `DEVELOPMENT_ACCOUNT_ID` và `PRODUCTION_ACCOUNT_ID` thay cho `DEV_ACCOUNT_ID` và `PROD_ACCOUNT_ID`.
 
 **Giữ dù là điểm yếu:** các dòng 2, 3, 4, 6 và 10 ở mục 7, vì chúng nằm trong khung workflow của dự án mẫu.
 

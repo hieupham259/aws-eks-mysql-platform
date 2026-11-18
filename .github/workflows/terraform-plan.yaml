@@ -1,10 +1,11 @@
 name: Terraform Plan
 
 # Required GitHub Actions Repository Variables (Settings -> Secrets and variables -> Actions -> Variables tab):
-#   DEV_ACCOUNT_ID  - 12-digit AWS account ID for the development account
-#   PROD_ACCOUNT_ID - 12-digit AWS account ID for the production account
+#   <environment>_ACCOUNT_ID - 12-digit AWS account ID of that environment, one variable per
+#                              environment: DEVELOPMENT_ACCOUNT_ID, PRODUCTION_ACCOUNT_ID
 # These are stored as Variables (not Secrets) because account IDs are configuration, not credentials.
-# All workflows in this directory consume the same two variables; set them once at the repository level.
+# All workflows in this directory look the variable up by environment name; GitHub stores the
+# names in upper case and ignores case on lookup. Set them once at the repository level.
 
 on:
   pull_request:
@@ -31,14 +32,23 @@ jobs:
   plan:
     needs: sync-check
     runs-on: ubuntu-latest
+    # The target branch of the pull request is the environment name. It selects
+    # the envs/<branch> directory and the <branch>_account_id repository variable.
     env:
-      ENV_DIR: ${{ github.base_ref == 'production' && 'production' || 'development' }}
-      ACCOUNT_ID: ${{ github.base_ref == 'production' && vars.PROD_ACCOUNT_ID || vars.DEV_ACCOUNT_ID }}
+      ENV_DIR: ${{ github.base_ref }}
+      ACCOUNT_ID: ${{ vars[format('{0}_account_id', github.base_ref)] }}
     defaults:
       run:
         working-directory: envs/${{ env.ENV_DIR }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Check the account variable
+        run: |
+          if [ -z "${ACCOUNT_ID}" ]; then
+            echo "::error::Repository variable ${ENV_DIR}_account_id is not set."
+            exit 1
+          fi
 
       - uses: hashicorp/setup-terraform@v4
         with:

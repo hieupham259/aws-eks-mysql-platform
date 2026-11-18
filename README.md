@@ -86,11 +86,11 @@ Hai file trong `notes/` là bản viết lại của hai tài liệu cùng tên 
 ## Quy ước của dự án
 
 - **Tên nhánh, tên Environment và tên thư mục `envs/<tên>` trùng nhau.** Merge vào nhánh `development` là deploy lên `development`; merge vào `production` là deploy lên `production`.
-- **Workflow chọn môi trường và account theo nhánh**, bằng cùng các biểu thức với dự án mẫu: nhánh `production` dùng `PROD_ACCOUNT_ID`, còn lại dùng `DEV_ACCOUNT_ID`.
-- **`main` là nhánh mặc định và không deploy.** Nó giữ file workflow cho các lần chạy theo lịch và bấm tay. Feature branch tách từ `development`; `production` và `main` nhận code từ `development`.
+- **Workflow chọn môi trường và account theo tên nhánh.** Tên nhánh cũng là tên Environment, tên thư mục `envs/<tên>` và phần đầu của biến account: nhánh `production` dùng `PRODUCTION_ACCOUNT_ID`, nhánh `development` dùng `DEVELOPMENT_ACCOUNT_ID`.
+- **`master` là nhánh mặc định và không deploy.** Nó giữ file workflow cho các lần chạy theo lịch và bấm tay. Feature branch tách từ `development`; `production` và `master` nhận code từ `development`.
 - **`main.tf` và `variables.tf` của hai thư mục env phải giống hệt nhau.** Job `sync-check` kiểm điều đó ở mỗi pull request và mỗi lần apply. Resource mới viết trong `envs/_shared/`.
 - **Tên dự án được ghi thẳng** trong workflow, template và `backend.tf`, như cách dự án mẫu ghi tên role của nó.
-- **Không có secret nào trong GitHub.** Chỉ có ba biến cấp repo: `DEV_ACCOUNT_ID`, `PROD_ACCOUNT_ID` và `OIDC_SUBJECT_PREFIX`.
+- **Không có secret nào trong GitHub.** Chỉ có bốn biến cấp repo: `DEVELOPMENT_ACCOUNT_ID`, `PRODUCTION_ACCOUNT_ID`, `OIDC_SUBJECT_PREFIX` và `DEPLOY_ENVIRONMENTS`.
 - **Account ID nằm trong `backend.tf` của từng thư mục env**, ở tên bucket của state, như ở dự án mẫu. AWS không coi account ID là thông tin bí mật.
 - **Region là `us-east-1`**, ghi rõ trong mọi lệnh.
 - **Code và chú thích trong code viết bằng tiếng Anh; plan viết bằng tiếng Việt.**
@@ -98,7 +98,7 @@ Hai file trong `notes/` là bản viết lại của hai tài liệu cùng tên 
 
 ## Thư mục này và repo trên GitHub
 
-Dự án nằm ở `D:\code\aws-eks-mysql-platform`, là một thư mục riêng, không thuộc repo nào khác. Thư mục đã được `git init` trên nhánh `main` và gắn `origin`, nhưng chưa có commit nào. Việc tạo repo `aws-eks-mysql-platform` trên GitHub, lần commit và lần push đầu tiên nằm ở bước 1 của plan 03.
+Dự án nằm ở `D:\code\aws-eks-mysql-platform`, là một thư mục riêng, không thuộc repo nào khác. Thư mục là một repo git trên nhánh `master`, đã gắn `origin` và đã đẩy lên repo `aws-eks-mysql-platform` trên GitHub. Việc tạo repo và lần push đầu tiên ứng với bước 1 của plan 03.
 
 Thư mục này phải là gốc của repo, vì GitHub chỉ đọc `.github/workflows` ở gốc repo.
 
@@ -118,8 +118,8 @@ Thư mục này phải là gốc của repo, vì GitHub chỉ đọc `.github/wo
 | # | Quyết định | Đang chọn | Ghi ở |
 |---|---|---|---|
 | 1 | Repo public hay private | public, vì gói Free, Pro và Team chỉ cho đặt người duyệt Environment ở repo public | plan 03, bước 1 |
-| 2 | Số account AWS | hai môi trường chung một account: `PROD_ACCOUNT_ID` cùng giá trị với `DEV_ACCOUNT_ID`. Code đã sẵn cho hai account; `production` chưa deploy | plan 03, bước 3 |
-| 3 | Role apply mang `AdministratorAccess` | giữ như dự án mẫu, bù bằng điều kiện `sub` chặt và Environment có người duyệt | plan 03, giới hạn đã biết |
+| 2 | Số account AWS | hai môi trường chung một account: `PRODUCTION_ACCOUNT_ID` cùng giá trị với `DEVELOPMENT_ACCOUNT_ID`. Code đã sẵn cho hai account; `production` chưa deploy | plan 03, bước 3 |
+| 3 | Role apply mang `AdministratorAccess` | giữ như dự án mẫu, bù bằng trust policy chỉ nhận Environment có tên trong `DEPLOY_ENVIRONMENTS`, và Environment có người duyệt | plan 03, giới hạn đã biết |
 | 4 | Có tạo private subnet không | không, chỉ giữ chỗ dải địa chỉ | plan 04, mục 10 |
 | 5 | Tên bucket backup | theo tên dự án và môi trường, không theo `dop-mysql-backup-<8 ký tự>` của runbook | plan 04, mục 10 |
 | 6 | Tên cluster | chưa chốt: `basic-cluster` như bản thiết kế, hoặc theo tên dự án | plan 04, mục 10 |

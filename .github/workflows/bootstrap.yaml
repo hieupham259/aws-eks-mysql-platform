@@ -19,16 +19,25 @@ jobs:
     environment: bootstrap        # requires manual approval from one reviewer
     env:
       AWS_REGION: us-east-1
-      ACCOUNT_ID: ${{ inputs.account == 'production' && vars.PROD_ACCOUNT_ID || vars.DEV_ACCOUNT_ID }}
+      # The selected name picks the <name>_account_id repository variable.
+      ACCOUNT_ID: ${{ vars[format('{0}_account_id', inputs.account)] }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Check the account variable
+        run: |
+          if [ -z "${ACCOUNT_ID}" ]; then
+            echo "::error::Repository variable ${{ inputs.account }}_account_id is not set."
+            exit 1
+          fi
 
       - name: Verify variables
         run: |
           echo "AWS_REGION: $AWS_REGION"
           echo "ACCOUNT_ID: $ACCOUNT_ID"
           echo "OIDC_SUBJECT_PREFIX: ${{ vars.OIDC_SUBJECT_PREFIX }}"
+          echo "DEPLOY_ENVIRONMENTS: ${{ vars.DEPLOY_ENVIRONMENTS }}"
 
       - name: Configure AWS credentials (assume gha-bootstrap)
         uses: aws-actions/configure-aws-credentials@v6
@@ -66,6 +75,7 @@ jobs:
             --no-fail-on-empty-changeset \
             --parameter-overrides \
               OidcSubjectPrefix=${{ vars.OIDC_SUBJECT_PREFIX }} \
+              "ApplyEnvironments=${{ vars.DEPLOY_ENVIRONMENTS }}" \
               TfstateBucketArn=${{ steps.tfstate.outputs.bucket_arn }} \
               TfstateKmsKeyArn=${{ steps.tfstate.outputs.kms_arn }}
 

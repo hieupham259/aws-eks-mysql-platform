@@ -20,6 +20,20 @@ Parameters:
       the trust anchor stack; the workflow passes the OIDC_SUBJECT_PREFIX
       repository variable.
 
+  ApplyEnvironments:
+    Type: CommaDelimitedList
+    AllowedPattern: '^[A-Za-z0-9_]+$'
+    ConstraintDescription: >-
+      Must be a comma-separated list of GitHub Environment names made of
+      letters, digits and underscores.
+    Description: >-
+      GitHub Environments whose jobs may assume the apply role, for example
+      "development,production". The workflow passes the DEPLOY_ENVIRONMENTS
+      repository variable. Add an environment only after it exists in GitHub
+      with a branch restriction and a required reviewer. Names are limited to
+      letters, digits and underscores because the workflows read the
+      <name>_account_id repository variable.
+
   TfstateBucketArn:
     Type: String
     Description: ARN of the Terraform state bucket (output of the state backend stack)
@@ -49,12 +63,8 @@ Resources:
             Condition:
               StringEquals:
                 'token.actions.githubusercontent.com:aud': sts.amazonaws.com
-                # One entry per context that runs a plan without an environment:
-                # pull requests (terraform-plan.yaml) and the default branch
-                # (terraform-drift.yaml, scheduled or started by hand).
-                'token.actions.githubusercontent.com:sub':
-                  - !Sub '${OidcSubjectPrefix}:pull_request'
-                  - !Sub '${OidcSubjectPrefix}:ref:refs/heads/main'
+              StringLike:
+                'token.actions.githubusercontent.com:sub': !Sub '${OidcSubjectPrefix}:*'
       Policies:
         - PolicyName: tfstate-read-and-lock
           PolicyDocument:
@@ -87,11 +97,7 @@ Resources:
         - { Key: ManagedBy, Value: cloudformation }
         - { Key: Component, Value: github-oidc-roles }
 
-  # Write role for "terraform apply" and "terraform destroy". Assumable only by
-  # a job that runs in a listed GitHub Environment. List an environment here
-  # only after it exists in GitHub with a branch restriction and a required
-  # reviewer: a workflow that names a missing environment makes GitHub create
-  # it without any protection.
+
   GhaApplyRole:
     Type: AWS::IAM::Role
     Properties:
@@ -110,10 +116,9 @@ Resources:
             Condition:
               StringEquals:
                 'token.actions.githubusercontent.com:aud': sts.amazonaws.com
-                # One entry per GitHub Environment that may deploy.
-                'token.actions.githubusercontent.com:sub':
-                  - !Sub '${OidcSubjectPrefix}:environment:development'
-                  - !Sub '${OidcSubjectPrefix}:environment:production'
+                'token.actions.githubusercontent.com:environment': !Ref ApplyEnvironments
+              StringLike:
+                'token.actions.githubusercontent.com:sub': !Sub '${OidcSubjectPrefix}:environment:*'
       Tags:
         - { Key: Project, Value: !Ref ProjectName }
         - { Key: ManagedBy, Value: cloudformation }

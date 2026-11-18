@@ -26,6 +26,7 @@ Ngày **17/11/2026**:
 
 - Đọc toàn bộ bootstrap, workflow và ghi chú của dự án mẫu ở commit `4de50f9`, nhánh `development`. Cấu hình Environment `development` của repo mẫu lấy từ ảnh trang Settings.
 - Kiểm tra tĩnh trên máy, đều qua: `terraform fmt -check -recursive`; `terraform validate` cho cả hai thư mục env, trên một bản sao, với AWS provider 5.100.0 có sẵn trong cache của dự án mẫu; sáu workflow qua `act --validate --strict`; ba template được kiểm mọi `!Ref`, `!Sub`, `!GetAtt`; `scripts/verify-envs-in-sync.sh` in `OK`.
+- Ngày **18/11/2026**, sau khi đổi cách chọn môi trường trong sáu workflow và điều kiện của role apply: sáu workflow qua lại `act --validate --strict`; template 03 được kiểm bằng cách đọc lại hai khối `Condition`. Điều kiện trên claim `environment` mới chỉ đối chiếu với tài liệu IAM.
 - **Chưa chạy thật.** Chưa có workflow nào chạy trên GitHub và chưa có stack nào được tạo trên AWS. Tài liệu của GitHub chỉ cho ví dụ dạng `sub` có ID với ngữ cảnh nhánh; plan giả định job khai `environment` dùng cùng tiền tố. Bước 5 và bước 8 là hai lần thử thật.
 
 ## Tên dùng trong plan
@@ -34,9 +35,9 @@ Ngày **17/11/2026**:
 |---|---|
 | Repo GitHub | `aws-eks-mysql-platform`, **public** |
 | Region | `us-east-1` |
-| Nhánh | `main` (mặc định, không deploy); `development` và `production` (mỗi nhánh ứng với môi trường cùng tên) |
-| Environment trên GitHub | `bootstrap` (chỉ nhánh `main`); `development` và `production` (mỗi cái chỉ nhận nhánh cùng tên) |
-| Biến cấp repo | `DEV_ACCOUNT_ID`, `PROD_ACCOUNT_ID`, `OIDC_SUBJECT_PREFIX` |
+| Nhánh | `master` (mặc định, không deploy); `development` và `production` (mỗi nhánh ứng với môi trường cùng tên) |
+| Environment trên GitHub | `bootstrap` (chỉ nhánh `master`); `development` và `production` (mỗi cái chỉ nhận nhánh cùng tên) |
+| Biến cấp repo | `DEVELOPMENT_ACCOUNT_ID`, `PRODUCTION_ACCOUNT_ID`, `OIDC_SUBJECT_PREFIX`, `DEPLOY_ENVIRONMENTS` |
 | Stack CloudFormation | `aws-eks-mysql-platform-trust-anchor`, `-tfstate-backend`, `-github-oidc-roles` |
 | Role IAM | `aws-eks-mysql-platform-gha-bootstrap`, `-gha-plan`, `-gha-apply` |
 | Bucket state | `aws-eks-mysql-platform-tfstate-<account-id>` |
@@ -46,7 +47,9 @@ Ngày **17/11/2026**:
 | | Dự án mẫu | Dự án này |
 |---|---|---|
 | Dạng `sub` | `repo:<org>/<repo>:...` | `repo:<owner>@<id>/<repo>@<id>:...`, vì repo tạo sau 15/07/2026. Tiền tố đưa vào tham số `OidcSubjectPrefix` |
-| Điều kiện `sub` của role plan và apply | `repo:<org>/<repo>:*` | ghi rõ từng ngữ cảnh |
+| Điều kiện vào role plan | `repo:<org>/<repo>:*` | như mẫu: tiền tố nối với `:*`, tức mọi ngữ cảnh của repo |
+| Điều kiện vào role apply | `repo:<org>/<repo>:*` | job phải chạy trong một Environment có tên nằm trong biến `DEPLOY_ENVIRONMENTS` |
+| Chọn môi trường và account trong workflow | biểu thức "`production` hay không", với hai biến `DEV_ACCOUNT_ID` và `PROD_ACCOUNT_ID` | dùng thẳng tên: tên nhánh là tên Environment, tên thư mục `envs/<tên>` và phần đầu của biến `<TÊN>_ACCOUNT_ID` |
 | OIDC provider | template luôn tạo | tham số `CreateOidcProvider`: account đã có thì dùng lại |
 | Tên role, stack, alias KMS | `gha-bootstrap`, `trust-anchor`, `alias/tfstate`... | có tiền tố tên dự án, để sống chung account với dự án mẫu |
 | Deploy trust anchor | upload qua Console | một lệnh `aws cloudformation deploy` |
@@ -64,7 +67,7 @@ aws sts get-caller-identity --query '[Account, Arn]' --output text; echo "exit=$
 
 **PASS:** in đúng account lab và `exit=0`. Danh tính này cần quyền admin: nó tạo role IAM ở bước 4.
 
-### Bước 1: Tạo repo public và đẩy code lên `main`
+### Bước 1: Tạo repo public và đẩy code lên `master`
 
 Trên GitHub: **New repository** → tên `aws-eks-mysql-platform` → **Public** → không tick thêm README, .gitignore hay license. Repo phải public nếu bạn dùng gói Free, Pro hoặc Team: chỉ repo public mới đặt được người duyệt cho Environment.
 
@@ -78,10 +81,10 @@ git add -A
 git rm --cached -q .github/workflows/oidc-test.yaml
 git status --short | grep -v '^A '
 git commit -m "chore: bootstrap templates, CI workflows and Terraform skeleton"
-git push -u origin main
+git push -u origin master
 ```
 
-Thư mục đã được `git init` trên nhánh `main` và đã gắn `origin`. File `oidc-test.yaml` cố ý chưa commit: nó là thay đổi của feature branch ở bước 7.
+Thư mục đã được `git init` trên nhánh `master` và đã gắn `origin`. File `oidc-test.yaml` cố ý chưa commit: nó là thay đổi của feature branch ở bước 7.
 
 **PASS bước 1:** lệnh `git status` chỉ in một dòng, `?? .github/workflows/oidc-test.yaml`. Sau khi push, tab **Actions** của repo liệt kê năm workflow.
 
@@ -101,13 +104,19 @@ repo:<tên-github-của-bạn>@<ID của chủ repo>/aws-eks-mysql-platform@<ID 
 
 ### Bước 3: Biến và Environment trên GitHub
 
-**Settings → Secrets and variables → Actions → tab Variables**, tạo ba biến:
+**Settings → Secrets and variables → Actions → tab Variables**, tạo bốn biến:
 
 | Tên | Giá trị |
 |---|---|
-| `DEV_ACCOUNT_ID` | 12 chữ số của account development |
-| `PROD_ACCOUNT_ID` | account của production. Dùng chung một account thì điền cùng giá trị, như dự án mẫu đang làm |
+| `DEVELOPMENT_ACCOUNT_ID` | 12 chữ số của account development |
+| `PRODUCTION_ACCOUNT_ID` | account của production. Dùng chung một account thì điền cùng giá trị, như dự án mẫu đang làm |
 | `OIDC_SUBJECT_PREFIX` | tiền tố ghép ở bước 2 |
+| `DEPLOY_ENVIRONMENTS` | `development,production` |
+
+Hai quy tắc về tên:
+
+- **Biến account mang tên môi trường.** Workflow đọc biến `<tên môi trường>_account_id`, ví dụ `development_account_id` khi chạy cho nhánh `development`. GitHub lưu tên biến bằng chữ hoa và không phân biệt hoa thường khi đọc, nên trên màn hình bạn thấy `DEVELOPMENT_ACCOUNT_ID`.
+- **`DEPLOY_ENVIRONMENTS` là danh sách Environment được vào role apply**, cách nhau bằng dấu phẩy. Workflow Bootstrap truyền nó vào stack 03 ở bước 5. Tên trong danh sách chỉ gồm chữ, số và gạch dưới.
 
 **Settings → Environments**, tạo `bootstrap`, `development` và `production`, cấu hình như Environment `development` của repo mẫu:
 
@@ -117,9 +126,9 @@ repo:<tên-github-của-bạn>@<ID của chủ repo>/aws-eks-mysql-platform@<ID 
 | Prevent self-review | không tick |
 | Wait timer | không tick |
 | Allow administrators to bypass configured protection rules | để tick, như mặc định |
-| Deployment branches and tags | **Selected branches and tags**, một luật: `main` cho `bootstrap`, `development` cho `development`, `production` cho `production` |
+| Deployment branches and tags | **Selected branches and tags**, một luật: `master` cho `bootstrap`, `development` cho `development`, `production` cho `production` |
 
-**PASS bước 3:** ba biến ở tab Variables, tab Secrets trống; ba Environment, mỗi cái nhận đúng một nhánh.
+**PASS bước 3:** bốn biến ở tab Variables, tab Secrets trống; ba Environment, mỗi cái nhận đúng một nhánh.
 
 Làm bước này trước bước 4, vì role tin vào tên Environment: Environment chưa có luật thì workflow nào khai tên đó cũng được role nhận.
 
@@ -155,7 +164,7 @@ aws iam get-role --role-name "${PROJECT}-gha-bootstrap" \
 
 ### Bước 5: Chạy workflow Bootstrap
 
-**Actions → Bootstrap (CFN - state backend + OIDC roles) → Run workflow** → nhánh `main`, **Target AWS account** chọn `development`. Lần chạy dừng ở **Waiting**: bấm **Review deployments** → tick `bootstrap` → **Approve and deploy**.
+**Actions → Bootstrap (CFN - state backend + OIDC roles) → Run workflow** → nhánh `master`, **Target AWS account** chọn `development`. Lần chạy dừng ở **Waiting**: bấm **Review deployments** → tick `bootstrap` → **Approve and deploy**.
 
 Workflow vào role bootstrap bằng OIDC, tạo bucket và KMS key cho state, rồi tạo role plan và role apply. Đây là lần đầu GitHub vào AWS.
 
@@ -182,7 +191,7 @@ Tới đây OIDC đã dựng xong: ba stack, ba role, và không có access key 
 
 ## Phần 2: Thử bằng một pull request
 
-File thử là `.github/workflows/oidc-test.yaml`. Nó chạy khi có push vào `development` hoặc `production`, in tên nhánh, vào role apply bằng OIDC, rồi hỏi AWS "tôi đang là ai":
+File thử là `.github/workflows/oidc-test.yaml`. Nó chạy khi có push vào `development` hoặc `production`, in tên nhánh, kiểm biến account, vào role apply bằng OIDC, rồi hỏi AWS "tôi đang là ai":
 
 ```yaml
 on:
@@ -192,12 +201,19 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/production' && 'production' || 'development' }}
+    environment: ${{ github.ref_name }}
     env:
-      ACCOUNT_ID: ${{ github.ref == 'refs/heads/production' && vars.PROD_ACCOUNT_ID || vars.DEV_ACCOUNT_ID }}
+      ACCOUNT_ID: ${{ vars[format('{0}_account_id', github.ref_name)] }}
     steps:
       - name: Print branch
         run: echo "Running on branch ${{ github.ref_name }}"
+
+      - name: Check the account variable
+        run: |
+          if [ -z "${ACCOUNT_ID}" ]; then
+            echo "::error::Repository variable ${GITHUB_REF_NAME}_account_id is not set."
+            exit 1
+          fi
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -208,7 +224,7 @@ jobs:
         run: aws sts get-caller-identity
 ```
 
-Environment và account được chọn theo nhánh, bằng đúng hai biểu thức mà các workflow Terraform dùng.
+Tên nhánh được dùng làm tên Environment và để tìm biến account `<tên nhánh>_account_id`, đúng như `terraform-apply.yaml` làm. Bước **Check the account variable** dừng job với thông báo rõ khi biến đó chưa có.
 
 ### Bước 7: Nhánh `feat/setup-deployment` và pull request
 
@@ -235,12 +251,12 @@ Trong pull request: **Merge pull request** → **Confirm merge**. Lần merge l�
 
 Vậy là xong: code đi từ feature branch qua pull request vào `development`, và workflow trên nhánh đó vào được AWS bằng role, không có access key nào.
 
-- **Thử `production` (tuỳ chọn):** mở pull request với base `production`, compare `development`, rồi merge. Cùng workflow chạy, lần này chọn Environment `production` và `PROD_ACCOUNT_ID`, in `Running on branch production`.
+- **Thử `production` (tuỳ chọn):** mở pull request với base `production`, compare `development`, rồi merge. Cùng workflow chạy, lần này chọn Environment `production` và `PRODUCTION_ACCOUNT_ID`, in `Running on branch production`.
 - **Sau khi thử:** workflow này chạy ở mọi lần merge vào hai nhánh môi trường. Không cần nữa thì **Actions → OIDC test → ··· → Disable workflow**.
 
 ## Bốn workflow Terraform chạy theo nhánh thế nào
 
-Bốn file này viết theo đúng khung của dự án mẫu và đã nằm trong repo. Plan này không chạy chúng; lần dùng thật đầu tiên là [plan 04](04-terraform-networking-va-s3-backup.md).
+Bốn file này viết theo khung của dự án mẫu, chỉ khác cách chọn môi trường và account, và đã nằm trong repo. Plan này không chạy chúng; lần dùng thật đầu tiên là [plan 04](04-terraform-networking-va-s3-backup.md).
 
 | Workflow | Chạy khi | Chọn môi trường và account theo | Role |
 |---|---|---|---|
@@ -249,9 +265,13 @@ Bốn file này viết theo đúng khung của dự án mẫu và đã nằm tro
 | `terraform-drift.yaml` | 01:00 hằng ngày, hoặc bấm tay | mỗi môi trường một job | plan |
 | `terraform-destroy.yaml` | bấm tay, phải gõ `destroy` | ô chọn môi trường; job chờ duyệt ở Environment cùng tên | apply |
 
-Quy tắc chọn giống nhau ở mọi file: nhánh `production` ra thư mục `envs/production`, Environment `production` và `PROD_ACCOUNT_ID`; mọi nhánh khác ra `development` và `DEV_ACCOUNT_ID`.
+Quy tắc chọn giống nhau ở mọi file: một cái tên dùng cho mọi thứ. Tên `production` ra thư mục `envs/production`, Environment `production` và biến `PRODUCTION_ACCOUNT_ID`; tên `development` ra bộ tương ứng. Cái tên đó là nhánh đích của pull request (plan), nhánh vừa nhận push (apply), tên trong ma trận (drift) hoặc ô chọn lúc bấm chạy (destroy).
 
-Workflow dò lệch có lịch chạy mỗi đêm kể từ lúc file nằm trên `main`, và sẽ đỏ cho tới khi môi trường được deploy ở plan 04. Muốn tránh email báo đỏ thì **Actions → Terraform Drift Detection → ··· → Disable workflow**, rồi bật lại ở plan 04.
+Không có chuyện một nhánh lạ rơi về `development`: mỗi job vào AWS có bước **Check the account variable**, dừng ngay khi thiếu biến `<tên>_account_id`.
+
+Danh sách môi trường vẫn ghi tay ở ba kiểu chỗ, vì GitHub bắt chúng phải viết tĩnh: `branches:` của plan, apply và `oidc-test`; ô chọn của destroy và Bootstrap; ma trận của drift. Thêm một môi trường mới thì sửa các chỗ đó, tạo biến account, tạo Environment có luật, rồi thêm tên vào `DEPLOY_ENVIRONMENTS` và chạy lại Bootstrap.
+
+Workflow dò lệch có lịch chạy mỗi đêm kể từ lúc file nằm trên `master`, và sẽ đỏ cho tới khi môi trường được deploy ở plan 04. Muốn tránh email báo đỏ thì **Actions → Terraform Drift Detection → ··· → Disable workflow**, rồi bật lại ở plan 04.
 
 ## Dọn toàn bộ
 
@@ -274,22 +294,27 @@ Ba thứ được giữ lại sau khi xoá stack, phải xử lý tay:
 - **KMS key:** **KMS → Customer managed keys** → key có mô tả `Encrypts the Terraform state of aws-eks-mysql-platform` → **Schedule key deletion**, 7 ngày. Key tốn 1 USD mỗi tháng cho tới lúc đặt lịch xoá; đây là chi phí duy nhất của plan này.
 - **OIDC provider:** để nguyên nếu account còn dự án khác dùng GitHub OIDC, ví dụ dự án mẫu.
 
-Trên GitHub: xoá ba Environment và ba biến.
+Trên GitHub: xoá ba Environment và bốn biến.
 
 ## Khi gặp lỗi
 
 | Thấy gì | Nguyên nhân thường gặp | Làm gì |
 |---|---|---|
 | `Not authorized to perform sts:AssumeRoleWithWebIdentity` | `sub` của job không khớp điều kiện của role, hoặc role chưa tồn tại | In điều kiện: `aws iam get-role --role-name <role> --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition'`. Báo `NoSuchEntity` thì role chưa có. Có role thì xem `sub` thật của job: **CloudTrail → Event history**, lọc **Event name** = `AssumeRoleWithWebIdentity`, cột `Username`. So từng ký tự; hay gặp nhất là hai ID bị đảo chỗ. Sửa biến `OIDC_SUBJECT_PREFIX`, làm lại bước 4 và bước 5 |
+| Cùng câu lỗi đó, chỉ với role apply, dù `sub` đúng tiền tố | tên Environment của job không nằm trong `DEPLOY_ENVIRONMENTS` lúc Bootstrap chạy | sửa biến `DEPLOY_ENVIRONMENTS`, làm lại bước 5 |
+| Job đỏ ở bước **Check the account variable** | chưa có biến `<tên>_account_id` cho môi trường đó, hoặc tên biến sai | tạo biến ở bước 3; tên phải là tên nhánh nối với `_ACCOUNT_ID` |
+| Bootstrap hỏng ở stack 03, CloudFormation từ chối tham số `ApplyEnvironments` hoặc `OidcSubjectPrefix` | biến `DEPLOY_ENVIRONMENTS` hoặc `OIDC_SUBJECT_PREFIX` rỗng, hoặc sai dạng | sửa biến ở bước 3, chạy lại bước 5 |
 | `sub` thật không có `@<số>` | repo đang phát dạng cũ | tiền tố là `repo:<tên-github-của-bạn>/aws-eks-mysql-platform`; sửa biến, làm lại bước 4 và bước 5 |
 | Bước 4 báo `EntityAlreadyExists` với provider | account đã có provider | xoá stack đang ở `ROLLBACK_COMPLETE` bằng `aws cloudformation delete-stack`, đặt `CREATE_OIDC_PROVIDER=false`, chạy lại |
-| Job đỏ ngay: nhánh không được deploy vào environment | luật nhánh của Environment không khớp nhánh đang chạy | sửa luật nhánh ở bước 3; Bootstrap phải chạy từ `main` |
+| Job đỏ ngay: nhánh không được deploy vào environment | luật nhánh của Environment không khớp nhánh đang chạy | sửa luật nhánh ở bước 3; Bootstrap phải chạy từ `master` |
 | Job chờ duyệt mãi, không có nút Approve | bạn không nằm trong Required reviewers, hoặc đã tick Prevent self-review | sửa Environment như bảng ở bước 3 |
 | Merge xong mà **OIDC test** không chạy | file `oidc-test.yaml` không nằm trong pull request, hoặc workflow đang bị Disable | xem tab **Files changed** của pull request; bật lại workflow |
 
 ## Giới hạn đã biết
 
-- Role apply và role bootstrap mang `AdministratorAccess`, như dự án mẫu. Thứ giới hạn chúng là điều kiện `sub` và luật của Environment.
+- Role apply và role bootstrap mang `AdministratorAccess`, như dự án mẫu. Thứ giới hạn chúng là trust policy chỉ nhận Environment đã chọn, và luật của Environment.
+- Role plan nhận mọi ngữ cảnh của repo, như dự án mẫu: workflow trên nhánh bất kỳ vào được role chỉ đọc này.
+- Điều kiện trên claim `environment` của role apply dùng một condition key AWS hỗ trợ từ 02/2026. Nó chưa được chạy thật ở repo này; bước 8 là lần thử đầu tiên.
 - Hai môi trường chung một account thì dùng chung role plan và role apply.
 - Plan này chỉ thử trường hợp vào được role. Không có bước thử các trường hợp phải bị từ chối.
 - Các điểm đến từ việc giữ đúng khung workflow Terraform của dự án mẫu:

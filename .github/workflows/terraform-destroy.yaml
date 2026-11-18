@@ -15,8 +15,9 @@ name: Terraform Destroy
 #
 # Required GitHub Actions Repository Variables (Settings -> Secrets and variables
 # -> Actions -> Variables tab):
-#   DEV_ACCOUNT_ID  - 12-digit AWS account ID for the development account
-#   PROD_ACCOUNT_ID - 12-digit AWS account ID for the production account
+#   <environment>_ACCOUNT_ID - 12-digit AWS account ID of that environment, one
+#                              variable per environment: DEVELOPMENT_ACCOUNT_ID,
+#                              PRODUCTION_ACCOUNT_ID
 # These are Variables (not Secrets) because account IDs are configuration.
 
 on:
@@ -53,7 +54,7 @@ jobs:
     environment: ${{ github.event.inputs.environment }}
     env:
       ENV_DIR: ${{ github.event.inputs.environment }}
-      ACCOUNT_ID: ${{ github.event.inputs.environment == 'production' && vars.PROD_ACCOUNT_ID || vars.DEV_ACCOUNT_ID }}
+      ACCOUNT_ID: ${{ vars[format('{0}_account_id', github.event.inputs.environment)] }}
     defaults:
       run:
         working-directory: envs/${{ env.ENV_DIR }}
@@ -69,6 +70,13 @@ jobs:
             exit 1
           fi
           echo "Confirmation accepted. Destroying environment '${{ env.ENV_DIR }}'."
+
+      - name: Check the account variable
+        run: |
+          if [ -z "${ACCOUNT_ID}" ]; then
+            echo "::error::Repository variable ${ENV_DIR}_account_id is not set."
+            exit 1
+          fi
 
       - uses: hashicorp/setup-terraform@v4
         with:
