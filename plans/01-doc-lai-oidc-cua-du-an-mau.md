@@ -12,17 +12,19 @@ Mọi số dòng trong plan này lấy ở commit [`4de50f9`](https://github.com
 ## Mục lục
 
 - [1. OIDC trong một phút](#1-oidc-trong-một-phút)
+  - [Từ GitHub OIDC token đến quyền gọi AWS API](#từ-github-oidc-token-đến-quyền-gọi-aws-api)
 - [2. Ba lớp, lớp sau dùng quyền do lớp trước tạo](#2-ba-lớp-lớp-sau-dùng-quyền-do-lớp-trước-tạo)
 - [3. Lộ trình đọc](#3-lộ-trình-đọc)
 - [4. Repo mẫu đã được thiết lập theo thứ tự nào](#4-repo-mẫu-đã-được-thiết-lập-theo-thứ-tự-nào)
 - [5. Ghi chú trong `notes/` lệch code ở đâu](#5-ghi-chú-trong-notes-lệch-code-ở-đâu)
 - [6. Ba điều dự án mới buộc phải làm khác](#6-ba-điều-dự-án-mới-buộc-phải-làm-khác)
+  - [Vì sao dự án mới dùng ba IAM role trong hai stack?](#vì-sao-dự-án-mới-dùng-ba-iam-role-trong-hai-stack)
 - [7. Câu hỏi tự kiểm](#7-câu-hỏi-tự-kiểm)
 - [8. Xong plan này khi nào](#8-xong-plan-này-khi-nào)
 
 ## 1. OIDC trong một phút
 
-Mỗi lần một job chạy, GitHub cấp cho job đó một tờ giấy giới thiệu có chữ ký, ghi rõ job thuộc repo nào, chạy trên nhánh hay môi trường nào. AWS được dặn trước: "tin giấy do GitHub ký, và chỉ giấy ghi đúng nội dung X mới được vào role Y". Job đưa giấy cho AWS, nhận lại khoá tạm có hạn một giờ, hết job thì khoá hết hạn.
+Khi job xin OIDC token, GitHub cấp cho job một tờ giấy giới thiệu có chữ ký, ghi rõ job thuộc repo nào, chạy trên nhánh hay môi trường nào. AWS được dặn trước: "tin giấy do GitHub ký, và chỉ giấy ghi đúng nội dung X mới được vào role Y". Job đưa giấy cho AWS và nhận credentials tạm thời có thời hạn riêng.
 
 Điều hay bị hiểu nhầm: **không phải cứ là workflow của repo thì vào được role**. AWS so từng chữ trong dòng `sub` của tờ giấy với điều kiện ghi trong role. Dòng `sub` đổi theo ngữ cảnh chạy:
 
@@ -35,6 +37,36 @@ Mỗi lần một job chạy, GitHub cấp cho job đó một tờ giấy giới
 Job đã khai `environment` thì `sub` luôn theo dạng environment, không còn mang tên nhánh. Chi tiết này là nguyên nhân của lần sửa trust policy ngày 15/05/2026 ở dự án mẫu, xem [chặng 4](#chặng-4-các-role-dùng-hằng-ngày).
 
 Thuật ngữ: tờ giấy là **JWT** (OIDC token), nơi dặn AWS là **IAM OIDC provider**, điều kiện ghi trong role là **trust policy**, lệnh đổi giấy lấy khoá là `sts:AssumeRoleWithWebIdentity`.
+
+### Từ GitHub OIDC token đến quyền gọi AWS API
+
+```mermaid
+sequenceDiagram
+    participant Job as GitHub Actions job
+    participant Issuer as GitHub OIDC issuer
+    participant STS as AWS STS
+    participant IAM as Cấu hình AWS IAM
+    participant API as AWS API
+
+    Job->>Issuer: 1. Xin OIDC token
+    Issuer-->>Job: 2. Trả JWT đã ký (iss, aud, sub, exp)
+    Job->>STS: 3. Gọi AssumeRoleWithWebIdentity với RoleArn và JWT
+    STS->>IAM: 4. Dựa vào IAM OIDC provider để xác minh token
+    Note over STS,IAM: Kiểm tra issuer, chữ ký, audience và hạn dùng
+    STS->>IAM: 5. Đối chiếu token với trust policy của role
+    Note over STS,IAM: Kiểm tra Principal.Federated, aud và sub
+    STS-->>Job: 6. Cấp credentials AWS tạm thời nếu cả hai kiểm tra đạt
+    Job->>API: 7. Dùng credentials tạm thời để gọi S3, CloudFormation...
+    Note over IAM,API: AWS đánh giá các policy áp dụng cho API được gọi
+```
+
+Sau khi nhận JWT do GitHub ký, job gửi token và ARN của role muốn sử dụng cho AWS STS qua `AssumeRoleWithWebIdentity`. Trong workflow, action `aws-actions/configure-aws-credentials` thực hiện lời gọi này.
+
+- **Bước 4 — AWS STS kiểm tra token.** Resource `AWS::IAM::OIDCProvider` tạo bản ghi IAM trong AWS account. `Url` xác định issuer được đăng ký và `ClientIdList` liệt kê các audience được chấp nhận. AWS dùng khoá công khai do GitHub công bố để kiểm tra chữ ký JWT. **GitHub phát hành token, job gửi token, STS xác minh token.** Bản ghi IAM cung cấp cấu hình để AWS xác minh. Nếu thiếu provider phù hợp trong account, STS từ chối yêu cầu.
+- **Bước 5 — AWS STS kiểm tra job có được assume role hay không.** Trong `AssumeRolePolicyDocument` của `AWS::IAM::Role`, `Principal.Federated` trỏ tới ARN của OIDC provider. `Condition` kiểm tra các claim như `aud` và `sub`. Một token hợp lệ vẫn có thể bị từ chối nếu `sub` của job không khớp điều kiện role.
+- **Bước 6–7 — STS cấp credentials tạm thời, rồi AWS kiểm quyền trên từng API.** Job dùng credentials để ký các request tiếp theo. Khi job gọi API như `s3:GetObject`, AWS đánh giá quyền áp dụng cho request, bao gồm các permission policy gắn với role qua `Policies` hoặc `ManagedPolicyArns`.
+
+`AssumeRolePolicyDocument` trả lời **job nào được nhận role**. Permission policy trả lời **phiên dùng role đó được gọi API nào, trên tài nguyên nào**. [IAM OIDC provider](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_oidc.html) · [AWS STS API](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html) · [Cách AWS đánh giá policy](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html)
 
 ## 2. Ba lớp, lớp sau dùng quyền do lớp trước tạo
 
@@ -174,6 +206,20 @@ Trust policy viết theo dạng cũ sẽ không khớp, và AWS chỉ báo chung
 Dự án mới dùng lại provider có sẵn, và đặt tiền tố tên dự án cho mọi thứ còn lại.
 
 **3. Điều kiện `:*` trên role admin.** Dự án mới ghi rõ từng ngữ cảnh được phép: role bootstrap chỉ nhận `:environment:bootstrap`, role apply chỉ nhận `:environment:development` và `:environment:production`, role plan chỉ nhận pull request và nhánh `main`. Plan 03 chỉ chạy thử trường hợp được vào; nó không có bước thử các trường hợp phải bị từ chối.
+
+### Vì sao dự án mới dùng ba IAM role trong hai stack?
+
+Trong repo `aws-eks-mysql-platform`, cả ba role tin cùng một GitHub OIDC provider trong AWS account. Chúng đều yêu cầu `aud` là `sts.amazonaws.com` và dùng cùng `OidcSubjectPrefix` để xác định repo. Phần cuối của `sub` phân biệt các job được phép assume từng role. [Stack 01](../bootstrap/01-trust-anchor.yaml) · [Stack 03](../bootstrap/03-github-oidc-roles.yaml)
+
+| Role | Job được phép assume | Quyền và công việc |
+|---|---|---|
+| `GhaBootstrapRole` (`…-gha-bootstrap`) trong stack 01 | Job dùng GitHub Environment `bootstrap` | `AdministratorAccess`. Workflow bootstrap dùng role này để triển khai stack 02 tạo backend cho Terraform state và stack 03 tạo hai role bên dưới. |
+| `GhaPlanRole` (`…-gha-plan`) trong stack 03 | Job có `sub` kết thúc bằng `:pull_request` hoặc `:ref:refs/heads/main` theo template hiện tại | `ReadOnlyAccess` và quyền riêng cho backend. Job plan hoặc drift có thể đọc state và tạo/xoá file khoá `.tflock`. Policy của role chỉ cấp quyền đọc trên file `terraform.tfstate`. |
+| `GhaApplyRole` (`…-gha-apply`) trong stack 03 | Job dùng GitHub Environment `development` hoặc `production` | `AdministratorAccess`. Workflow Terraform dùng role này khi apply hoặc destroy hạ tầng. |
+
+**Vì sao tách stack 01 và stack 03?** Người vận hành deploy stack 01 trước để GitHub Actions có role đăng nhập AWS lần đầu. Workflow bootstrap dùng role đó để deploy stack 02 rồi stack 03. Stack 03 cần ARN của bucket S3 và KMS key do stack 02 cung cấp. [Workflow Bootstrap](../.github/workflows/bootstrap.yaml)
+
+**Vì sao nên tách ba role?** Job kiểm tra pull request và drift chỉ cần đọc hạ tầng, đọc state và quản lý file khoá. Role riêng giúp các job đó chạy với quyền phù hợp. Bootstrap và apply hiện cùng có `AdministratorAccess`. Tách hai role này giúp mỗi workflow dùng một IAM identity với điều kiện truy cập riêng. Job dùng Environment `development` hoặc `production` khớp trust policy của `gha-apply`, còn `gha-bootstrap` yêu cầu Environment `bootstrap`. Cách tách này cũng cho phép siết quyền của từng role độc lập về sau.
 
 ## 7. Câu hỏi tự kiểm
 
