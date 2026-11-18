@@ -295,29 +295,28 @@ steps:
       role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/aws-eks-mysql-platform-gha-apply   # (1)
       aws-region: us-east-1                                                                      # (2)
 
-  - name: Terraform init
-    run: terraform init -no-color                                                                # (3)
+  - name: Terraform init                                                                         # (3)
+    run: terraform init -no-color -backend-config="bucket=aws-eks-mysql-platform-tfstate-${ACCOUNT_ID}"
 ```
 
 ```hcl
 # envs/development/backend.tf
-bucket = "aws-eks-mysql-platform-tfstate-<account-id>"
-key    = "aws-eks-mysql-platform/development/terraform.tfstate"
+key = "aws-eks-mysql-platform/development/terraform.tfstate"
 ```
 
 1. **ARN của role** chứa account ID và tên role. Job vào role nằm trong account nào thì mọi thứ nó tạo nằm trong account đó.
 2. **Region** quyết định lời gọi API đi tới đâu. Repo này ghi cứng `us-east-1`.
-3. **State** gồm tên bucket và key, cả hai ghi trong `backend.tf` của thư mục env mà job đang đứng, ở đây là `envs/development`. `terraform init` đọc file đó.
+3. **State** gồm tên bucket và key. Key ghi trong `backend.tf` của thư mục env mà job đang đứng, ở đây là `envs/development`. Tên bucket không ghi trong file: bước `terraform init` ghép nó từ `ACCOUNT_ID` và truyền vào bằng `-backend-config`.
 
 Khung này giống dự án mẫu. Khác ở chỗ tên nhánh được dùng thẳng, không qua biểu thức "`production` hay không". Những gì quyết định đích đến, không thứ nào do người bấm chạy gõ vào:
 
 | Nguồn | Cho ra |
 |---|---|
-| biến repo `DEVELOPMENT_ACCOUNT_ID` và `PRODUCTION_ACCOUNT_ID` | account trong ARN của role |
+| biến repo `DEVELOPMENT_ACCOUNT_ID` và `PRODUCTION_ACCOUNT_ID` | account trong ARN của role, và đuôi của tên bucket state |
 | tên nhánh | biến account nào được dùng, tên Environment, thư mục `envs/<môi trường>` |
-| tên ghi thẳng trong file | tên role trong workflow; tên bucket và key trong `backend.tf` |
+| tên ghi thẳng trong file | tên role và phần đầu tên bucket trong workflow; key trong `backend.tf` |
 
-Account ID vì vậy xuất hiện ở hai nơi, biến repo và `backend.tf`, và hai nơi phải khớp nhau cho từng môi trường. Một nhánh lạ không rơi về môi trường nào. Workflow chỉ chạy với các nhánh ghi trong `on:`; biến `<tên nhánh>_account_id` phải tồn tại, nếu không bước **Check the account variable** dừng job; và role apply chỉ nhận Environment có tên trong `DEPLOY_ENVIRONMENTS`.
+Account ID vì vậy chỉ nằm ở một nơi là biến repo; role và bucket state luôn thuộc cùng một account. Dự án mẫu ghi account ID ở cả biến repo lẫn `backend.tf`, và hai nơi phải khớp nhau. Một nhánh lạ không rơi về môi trường nào. Workflow chỉ chạy với các nhánh ghi trong `on:`; biến `<tên nhánh>_account_id` phải tồn tại, nếu không bước **Check the account variable** dừng job; và role apply chỉ nhận Environment có tên trong `DEPLOY_ENVIRONMENTS`.
 
 ## Sơ đồ tuần tự: từ merge tới tài nguyên trên AWS
 

@@ -4,7 +4,7 @@ Dự án này dựng lại bài 16 của khoá "DevOps Projects with Kubernetes 
 
 Chuỗi cần nối: **VPC → EKS → IAM → EBS CSI → MySQL → backup/restore (S3)**.
 
-**Trạng thái ngày 17/11/2026:** đã có bốn plan đầu và phần code CI/CD đi kèm plan 03. Code đã qua kiểm tra tĩnh trên máy. Chưa có gì được chạy trên GitHub hay tạo trên AWS.
+**Trạng thái ngày 19/11/2026:** plan 03 đã chạy xong trên GitHub và AWS: ba stack nền đã được tạo, workflow Bootstrap và OIDC test đã xanh cho cả `development` và `production`. Terraform chưa apply lần nào; bước tiếp theo là plan 04.
 
 ## Mục lục
 
@@ -91,7 +91,7 @@ Hai file trong `notes/` là bản viết lại của hai tài liệu cùng tên 
 - **`main.tf` và `variables.tf` của hai thư mục env phải giống hệt nhau.** Job `sync-check` kiểm điều đó ở mỗi pull request và mỗi lần apply. Resource mới viết trong `envs/_shared/`.
 - **Tên dự án được ghi thẳng** trong workflow, template và `backend.tf`, như cách dự án mẫu ghi tên role của nó.
 - **Không có secret nào trong GitHub.** Chỉ có bốn biến cấp repo: `DEVELOPMENT_ACCOUNT_ID`, `PRODUCTION_ACCOUNT_ID`, `OIDC_SUBJECT_PREFIX` và `DEPLOY_ENVIRONMENTS`.
-- **Account ID nằm trong `backend.tf` của từng thư mục env**, ở tên bucket của state, như ở dự án mẫu. AWS không coi account ID là thông tin bí mật.
+- **Account ID không nằm trong code.** Tên bucket của state kết thúc bằng account ID, nên `backend.tf` không ghi tên bucket: workflow truyền nó vào `terraform init` bằng `-backend-config`, lấy account ID từ biến `<TÊN>_ACCOUNT_ID`. Dự án mẫu thì ghi thẳng tên bucket trong `backend.tf`.
 - **Region là `us-east-1`**, ghi rõ trong mọi lệnh.
 - **Code và chú thích trong code viết bằng tiếng Anh; plan viết bằng tiếng Việt.**
 - **Mọi thay đổi hạ tầng đi qua pull request.** Lệnh `aws` trên máy chỉ để xem, trừ bước làm tay duy nhất ở bước 4 của plan 03 và lần cố ý sửa tay để thử dò lệch ở plan 04.

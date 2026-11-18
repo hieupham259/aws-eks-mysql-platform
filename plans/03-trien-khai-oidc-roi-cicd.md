@@ -27,7 +27,9 @@ Ngày **17/11/2026**:
 - Đọc toàn bộ bootstrap, workflow và ghi chú của dự án mẫu ở commit `4de50f9`, nhánh `development`. Cấu hình Environment `development` của repo mẫu lấy từ ảnh trang Settings.
 - Kiểm tra tĩnh trên máy, đều qua: `terraform fmt -check -recursive`; `terraform validate` cho cả hai thư mục env, trên một bản sao, với AWS provider 5.100.0 có sẵn trong cache của dự án mẫu; sáu workflow qua `act --validate --strict`; ba template được kiểm mọi `!Ref`, `!Sub`, `!GetAtt`; `scripts/verify-envs-in-sync.sh` in `OK`.
 - Ngày **18/11/2026**, sau khi đổi cách chọn môi trường trong sáu workflow và điều kiện của role apply: sáu workflow qua lại `act --validate --strict`; template 03 được kiểm bằng cách đọc lại hai khối `Condition`. Điều kiện trên claim `environment` mới chỉ đối chiếu với tài liệu IAM.
-- **Chưa chạy thật.** Chưa có workflow nào chạy trên GitHub và chưa có stack nào được tạo trên AWS. Tài liệu của GitHub chỉ cho ví dụ dạng `sub` có ID với ngữ cảnh nhánh; plan giả định job khai `environment` dùng cùng tiền tố. Bước 5 và bước 8 là hai lần thử thật.
+- Ngày **19/11/2026**, sau các lần chạy dưới đây: tên bucket của state được chuyển từ `backend.tf` sang tham số `-backend-config` của `terraform init` trong bốn workflow Terraform. Đã qua `terraform fmt -check`, `terraform validate` và `act --validate --strict`; chưa chạy thật, lần đầu là pull request của plan 04.
+- **Đã chạy thật ngày 19/11/2026.** Trust anchor được tạo qua Console thay cho lệnh ở bước 4; workflow Bootstrap xanh; OIDC test xanh cho cả `development` và `production`. OIDC test chạy ngay ở bước 6, vì `oidc-test.yaml` đã nằm trên `master` từ commit đầu, nên bước 7 và 8 không được làm riêng.
+- Ba giả định đã được kiểm qua các lần chạy đó: tiền tố `sub` có ID dùng được với ngữ cảnh `environment`; biến `<tên>_account_id` đọc được dù GitHub lưu tên bằng chữ hoa; điều kiện trên claim `environment` của role apply cho job hợp lệ đi qua.
 
 ## Tên dùng trong plan
 
@@ -50,6 +52,7 @@ Ngày **17/11/2026**:
 | Điều kiện vào role plan | `repo:<org>/<repo>:*` | như mẫu: tiền tố nối với `:*`, tức mọi ngữ cảnh của repo |
 | Điều kiện vào role apply | `repo:<org>/<repo>:*` | job phải chạy trong một Environment có tên nằm trong biến `DEPLOY_ENVIRONMENTS` |
 | Chọn môi trường và account trong workflow | biểu thức "`production` hay không", với hai biến `DEV_ACCOUNT_ID` và `PROD_ACCOUNT_ID` | dùng thẳng tên: tên nhánh là tên Environment, tên thư mục `envs/<tên>` và phần đầu của biến `<TÊN>_ACCOUNT_ID` |
+| Tên bucket của state | ghi thẳng trong `backend.tf`, có account ID | không ghi trong `backend.tf`; workflow truyền vào `terraform init` bằng `-backend-config`, lấy account ID từ biến account |
 | OIDC provider | template luôn tạo | tham số `CreateOidcProvider`: account đã có thì dùng lại |
 | Tên role, stack, alias KMS | `gha-bootstrap`, `trust-anchor`, `alias/tfstate`... | có tiền tố tên dự án, để sống chung account với dự án mẫu |
 | Deploy trust anchor | upload qua Console | một lệnh `aws cloudformation deploy` |
@@ -71,12 +74,9 @@ aws sts get-caller-identity --query '[Account, Arn]' --output text; echo "exit=$
 
 Trên GitHub: **New repository** → tên `aws-eks-mysql-platform` → **Public** → không tick thêm README, .gitignore hay license. Repo phải public nếu bạn dùng gói Free, Pro hoặc Team: chỉ repo public mới đặt được người duyệt cho Environment.
 
-Điền account ID vào tên bucket của state, rồi commit mọi thứ trừ workflow thử:
+Commit mọi thứ trừ workflow thử. Không phải điền account ID vào file nào: `backend.tf` không ghi tên bucket, workflow tự ghép nó từ biến account ở bước 3.
 
 ```bash
-ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-sed -i "s/<account-id>/${ACCOUNT_ID}/" envs/development/backend.tf envs/production/backend.tf
-
 git add -A
 git rm --cached -q .github/workflows/oidc-test.yaml
 git status --short | grep -v '^A '
@@ -314,7 +314,7 @@ Trên GitHub: xoá ba Environment và bốn biến.
 
 - Role apply và role bootstrap mang `AdministratorAccess`, như dự án mẫu. Thứ giới hạn chúng là trust policy chỉ nhận Environment đã chọn, và luật của Environment.
 - Role plan nhận mọi ngữ cảnh của repo, như dự án mẫu: workflow trên nhánh bất kỳ vào được role chỉ đọc này.
-- Điều kiện trên claim `environment` của role apply dùng một condition key AWS hỗ trợ từ 02/2026. Nó chưa được chạy thật ở repo này; bước 8 là lần thử đầu tiên.
+- Điều kiện trên claim `environment` của role apply dùng một condition key AWS hỗ trợ từ 02/2026. Lần chạy ngày 19/11/2026 cho thấy job trong Environment `development` và `production` vào được role. Chiều ngược lại, tức Environment ngoài danh sách bị từ chối, chưa được thử.
 - Hai môi trường chung một account thì dùng chung role plan và role apply.
 - Plan này chỉ thử trường hợp vào được role. Không có bước thử các trường hợp phải bị từ chối.
 - Các điểm đến từ việc giữ đúng khung workflow Terraform của dự án mẫu:

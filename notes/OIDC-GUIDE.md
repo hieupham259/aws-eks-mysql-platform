@@ -195,7 +195,7 @@ dạng mới: repo:<owner>@<owner_id>/<repo>@<repo_id>:ref:refs/heads/main
 
 Repo `aws-eks-mysql-platform` được tạo sau mốc này, nên mọi `sub` trong tài liệu dùng dạng mới.
 
-**Điều đã kiểm và điều còn giả định:** tài liệu của GitHub cho ví dụ dạng mới với ngữ cảnh nhánh. Với `environment` và `pull_request`, tài liệu không cho ví dụ; repo này giả định chúng dùng cùng tiền tố. Lần kiểm thật là khi workflow Bootstrap và workflow OIDC test vào được role (plan 03, bước 5 và bước 8).
+**Điều đã kiểm và điều còn giả định:** tài liệu của GitHub cho ví dụ dạng mới với ngữ cảnh nhánh. Với `environment` và `pull_request`, tài liệu không cho ví dụ. Ngữ cảnh `environment` đã được kiểm thật ngày 19/11/2026: workflow Bootstrap và workflow OIDC test vào được role với đúng tiền tố này. Ngữ cảnh `pull_request` vẫn là giả định; lần kiểm đầu tiên là pull request của plan 04.
 
 ### Ba cách biết tiền tố của một repo
 
@@ -310,7 +310,7 @@ AWS Security Blog mô tả năm bước: tạo OIDC provider, tạo role với t
 
 Dạng mới của `sub` cần ID của chủ repo và ID của repo. Lấy cả hai bằng một lệnh gọi API công khai của GitHub, rồi ghép thành `<tiền tố>`, là giá trị của biến `OIDC_SUBJECT_PREFIX`. Cách làm từng bước: [plan 03, bước 2](../plans/03-trien-khai-oidc-roi-cicd.md#bước-2-lấy-hai-id-của-repo).
 
-Tiền tố ghép kiểu này dựa trên tài liệu của GitHub, chưa phải chuỗi đọc từ token thật. Nó được kiểm lần đầu khi workflow Bootstrap vào được role.
+Tiền tố ghép kiểu này dựa trên tài liệu của GitHub, chưa phải chuỗi đọc từ token thật. Nó đã được kiểm ngày 19/11/2026, khi workflow Bootstrap vào được role.
 
 ### Bước 1: OIDC provider trong AWS
 
@@ -398,7 +398,7 @@ Vì sao role apply cần cả hai điều kiện:
 
 - `sub` dạng `:environment:*` giữ đúng repo và buộc job khai một Environment. Một mình nó chưa đủ: workflow gọi tên một Environment chưa có thì GitHub tự tạo nó, không có luật nào.
 - Điều kiện trên claim `environment` so tên với danh sách đã chọn. Thêm môi trường mới là sửa biến `DEPLOY_ENVIRONMENTS` rồi chạy lại workflow Bootstrap, không sửa template.
-- Condition key `environment` được AWS hỗ trợ trong trust policy từ 02/2026. Ở repo này nó chưa được chạy thật; lần thử đầu là bước 8 của plan 03.
+- Condition key `environment` được AWS hỗ trợ trong trust policy từ 02/2026. Ở repo này nó đã chạy đúng ngày 19/11/2026 với hai Environment trong danh sách. Trường hợp Environment ngoài danh sách bị từ chối thì chưa được thử.
 
 Quyền của role (permissions policy) là chuyện riêng, tách khỏi trust policy: trust policy trả lời "ai được thành role này", permissions policy trả lời "thành rồi thì được làm gì". Repo này gán `ReadOnlyAccess` cộng một policy nhỏ cho role plan, và `AdministratorAccess` cho role apply và role bootstrap. Hai role admin được bù bằng trust policy chỉ nhận Environment đã chọn, và Environment có người duyệt.
 
@@ -576,7 +576,6 @@ Lớp 3 là thứ job xin. Lớp 4 là thứ AWS cho. Job xin sai thì lớp 4 t
 # envs/development/backend.tf
 terraform {
   backend "s3" {
-    bucket       = "aws-eks-mysql-platform-tfstate-<account-id>"
     key          = "aws-eks-mysql-platform/development/terraform.tfstate"
     region       = "us-east-1"
     encrypt      = true
@@ -586,7 +585,12 @@ terraform {
 }
 ```
 
-Tên bucket được ghi trong file, có account ID ở đuôi, như ở dự án mẫu. `envs/production/backend.tf` giống hệt, chỉ khác `key`. Hai môi trường chung account thì chung một bucket, mỗi môi trường một key.
+```yaml
+# bước Terraform init trong bốn workflow terraform-*.yaml
+run: terraform init -no-color -backend-config="bucket=aws-eks-mysql-platform-tfstate-${ACCOUNT_ID}"
+```
+
+Tên bucket có account ID ở đuôi nên không được ghi trong file: workflow ghép nó từ biến `ACCOUNT_ID` và truyền vào lúc `terraform init`. Dự án mẫu thì ghi thẳng tên bucket trong `backend.tf`. `envs/production/backend.tf` giống hệt, chỉ khác `key`. Hai môi trường chung account thì chung một bucket, mỗi môi trường một key.
 
 ## 11. Tóm tắt: chỗ nào trỏ tới đâu
 
@@ -605,7 +609,8 @@ Tên bucket được ghi trong file, có account ID ở đuôi, như ở dự á
 | `.github/workflows/terraform-apply.yaml` | `on.push.branches` | chỉ push vào `development` và `production` mới chạy |
 | `.github/workflows/terraform-drift.yaml` | `matrix.env` | mỗi môi trường một job; tên trong ma trận là nhánh, thư mục env và phần đầu của biến account |
 | `.github/workflows/terraform-destroy.yaml` | ô chọn `environment` | Environment, thư mục env và account bị xoá |
-| `envs/<môi trường>/backend.tf` | `bucket`, `key` | state nằm ở bucket nào, và ở đâu trong bucket |
+| `envs/<môi trường>/backend.tf` | `key` | state nằm ở đâu trong bucket |
+| `.github/workflows/terraform-*.yaml` | `-backend-config` của bước `terraform init` | state nằm ở bucket nào: tên dự án nối với account ID của môi trường |
 | Settings → Environments | luật nhánh, người duyệt | nhánh nào dùng được Environment nào, ai duyệt |
 
 ## 12. Các tầng bảo vệ
@@ -682,7 +687,7 @@ role-to-assume: arn:aws:iam::<account-id>:role/aws-eks-mysql-platform-gha-apply
 
 **Bước 7: AWS xét trust policy.** `aud` khớp; `sub` có dạng `<tiền tố>:environment:*`; và `environment` là `development`, một tên trong danh sách. STS trả credentials tạm thời, hạn một giờ.
 
-**Bước 8: Terraform chạy.** `terraform init` đọc tên bucket và key trong `envs/development/backend.tf`, mở state, giữ khoá bằng lock file. Rồi `plan` ghi ra một file plan, và `apply` chạy đúng file đó.
+**Bước 8: Terraform chạy.** `terraform init` nhận tên bucket từ tham số `-backend-config`, đọc key trong `envs/development/backend.tf`, mở state, giữ khoá bằng lock file. Rồi `plan` ghi ra một file plan, và `apply` chạy đúng file đó.
 
 **Bước 9: job kết thúc.** Máy chạy job bị huỷ, biến môi trường mất theo. Credentials hết hạn sau tối đa một giờ. Mục Deployments của repo thêm một dòng `development`.
 
@@ -756,7 +761,7 @@ Một workflow trên nhánh bất kỳ của repo, có hay không có pull reque
 
 > **Đâu là chỗ làm job trỏ tới đúng account và đúng môi trường?**
 
-Năm chỗ, ở mục 10: account nơi deploy trust anchor; biến `<TÊN MÔI TRƯỜNG>_ACCOUNT_ID`, tìm theo tên nhánh; tên Environment, chính là tên nhánh; trust policy của từng role; và tên bucket cùng key của state trong `backend.tf`.
+Năm chỗ, ở mục 10: account nơi deploy trust anchor; biến `<TÊN MÔI TRƯỜNG>_ACCOUNT_ID`, tìm theo tên nhánh; tên Environment, chính là tên nhánh; trust policy của từng role; và nơi lưu state, gồm tên bucket do workflow ghép từ account ID và key ghi trong `backend.tf`.
 
 > **`bootstrap/01-trust-anchor.yaml` tạo chính xác những gì?**
 
