@@ -14,11 +14,11 @@ Mọi số dòng trong plan này lấy ở commit [`4de50f9`](https://github.com
 - [1. OIDC trong một phút](#1-oidc-trong-một-phút)
   - [Từ GitHub OIDC token đến quyền gọi AWS API](#từ-github-oidc-token-đến-quyền-gọi-aws-api)
 - [2. Ba lớp, lớp sau dùng quyền do lớp trước tạo](#2-ba-lớp-lớp-sau-dùng-quyền-do-lớp-trước-tạo)
+  - [Vì sao cả hai dự án tách role bootstrap, plan và apply?](#vì-sao-cả-hai-dự-án-tách-role-bootstrap-plan-và-apply)
 - [3. Lộ trình đọc](#3-lộ-trình-đọc)
 - [4. Repo mẫu đã được thiết lập theo thứ tự nào](#4-repo-mẫu-đã-được-thiết-lập-theo-thứ-tự-nào)
 - [5. Ghi chú trong `notes/` lệch code ở đâu](#5-ghi-chú-trong-notes-lệch-code-ở-đâu)
 - [6. Ba điều dự án mới buộc phải làm khác](#6-ba-điều-dự-án-mới-buộc-phải-làm-khác)
-  - [Vì sao dự án mới dùng ba IAM role trong hai stack?](#vì-sao-dự-án-mới-dùng-ba-iam-role-trong-hai-stack)
 - [7. Câu hỏi tự kiểm](#7-câu-hỏi-tự-kiểm)
 - [8. Xong plan này khi nào](#8-xong-plan-này-khi-nào)
 
@@ -77,6 +77,24 @@ Sau khi nhận JWT do GitHub ký, job gửi token và ARN của role muốn sử
 | 2. Hạ tầng | workflow `terraform-*.yaml`, dùng role `gha-infra-plan` và `gha-infra-apply` | VPC, RDS, ECS, ALB... | `envs/`, `modules/` |
 
 Thiếu lớp 0 thì workflow bootstrap không có role nào để vào. Thiếu lớp 1 thì workflow Terraform không có role và không có chỗ lưu state. Đây là lý do dự án mẫu có đúng một bước làm tay.
+
+### Vì sao cả hai dự án tách role bootstrap, plan và apply?
+
+Cả dự án mẫu `3-tiers-app-infrastructure` và dự án mới `aws-eks-mysql-platform` đều tách ba role phục vụ CI/CD hạ tầng. Trong mỗi dự án, ba role dùng cùng GitHub OIDC provider của AWS account và yêu cầu `aud` là `sts.amazonaws.com`. Trust policy của từng role xác định job nào được assume role đó.
+
+| Vai trò | Stack tạo role | Dự án mẫu | Dự án mới | Quyền và công việc chung |
+|---|---|---|---|---|
+| Bootstrap | `01-trust-anchor` | `gha-bootstrap` | `aws-eks-mysql-platform-gha-bootstrap` | `AdministratorAccess`. Job dùng Environment `bootstrap` để triển khai stack 02 và 03. |
+| Plan | `03-github-oidc-roles` | `gha-infra-plan` | `aws-eks-mysql-platform-gha-plan` | `ReadOnlyAccess` và quyền riêng cho backend Terraform state. Job dùng role này để chạy `terraform plan` trên pull request hoặc kiểm tra drift. |
+| Apply | `03-github-oidc-roles` | `gha-infra-apply` | `aws-eks-mysql-platform-gha-apply` | `AdministratorAccess`. Workflow dùng role này để áp dụng thay đổi Terraform lên hạ tầng. |
+
+Stack 03 của dự án mẫu còn tạo hai role deploy cho repo ứng dụng, `gha-backend-deploy` và `gha-frontend-deploy`. Bảng trên tập trung vào ba role phục vụ hạ tầng. [Stack 01 của dự án mẫu](https://github.com/hieupham259/3-tiers-app-infrastructure/blob/4de50f9b3d740454eb72c6f957fe9bda0380cdee/bootstrap/01-trust-anchor.yaml) · [Stack 03 của dự án mẫu](https://github.com/hieupham259/3-tiers-app-infrastructure/blob/4de50f9b3d740454eb72c6f957fe9bda0380cdee/bootstrap/03-github-oidc-roles.yaml) · [Stack 01 của dự án mới](../bootstrap/01-trust-anchor.yaml) · [Stack 03 của dự án mới](../bootstrap/03-github-oidc-roles.yaml)
+
+**Tách stack theo thứ tự triển khai.** Người vận hành deploy stack 01 trước để GitHub Actions có role đăng nhập AWS lần đầu. Workflow bootstrap dùng role đó để deploy stack 02, lấy ARN của bucket S3 và KMS key rồi truyền vào stack 03 khi tạo các role Terraform.
+
+**Tách role theo công việc.** Role plan chỉ cần quyền đọc hạ tầng và quyền cần thiết trên backend state. Tách role này giữ quyền quản trị ngoài các job kiểm tra PR và drift. Role bootstrap và role apply hiện cùng có `AdministratorAccess`, nhưng dùng cho hai giai đoạn khác nhau. Tách chúng cho phép đặt điều kiện assume riêng và điều chỉnh quyền từng role độc lập.
+
+**Dự án mới siết trust policy và quyền state.** Role plan và apply của dự án mẫu cùng chấp nhận `repo:<org>/<repo>:*`. Dự án mới liệt kê từng ngữ cảnh được phép. Role plan nhận `:pull_request` và `:ref:refs/heads/main` theo template hiện tại, còn role apply nhận `:environment:development` và `:environment:production`. Với backend state, policy của role plan trong dự án mẫu cho phép ghi cả file `terraform.tfstate`. Dự án mới cấp quyền đọc trên file state và cấp thêm quyền tạo/xoá trên file khoá `.tflock`.
 
 ## 3. Lộ trình đọc
 
@@ -206,20 +224,6 @@ Trust policy viết theo dạng cũ sẽ không khớp, và AWS chỉ báo chung
 Dự án mới dùng lại provider có sẵn, và đặt tiền tố tên dự án cho mọi thứ còn lại.
 
 **3. Điều kiện `:*` trên role admin.** Dự án mới ghi rõ từng ngữ cảnh được phép: role bootstrap chỉ nhận `:environment:bootstrap`, role apply chỉ nhận `:environment:development` và `:environment:production`, role plan chỉ nhận pull request và nhánh `main`. Plan 03 chỉ chạy thử trường hợp được vào; nó không có bước thử các trường hợp phải bị từ chối.
-
-### Vì sao dự án mới dùng ba IAM role trong hai stack?
-
-Trong repo `aws-eks-mysql-platform`, cả ba role tin cùng một GitHub OIDC provider trong AWS account. Chúng đều yêu cầu `aud` là `sts.amazonaws.com` và dùng cùng `OidcSubjectPrefix` để xác định repo. Phần cuối của `sub` phân biệt các job được phép assume từng role. [Stack 01](../bootstrap/01-trust-anchor.yaml) · [Stack 03](../bootstrap/03-github-oidc-roles.yaml)
-
-| Role | Job được phép assume | Quyền và công việc |
-|---|---|---|
-| `GhaBootstrapRole` (`…-gha-bootstrap`) trong stack 01 | Job dùng GitHub Environment `bootstrap` | `AdministratorAccess`. Workflow bootstrap dùng role này để triển khai stack 02 tạo backend cho Terraform state và stack 03 tạo hai role bên dưới. |
-| `GhaPlanRole` (`…-gha-plan`) trong stack 03 | Job có `sub` kết thúc bằng `:pull_request` hoặc `:ref:refs/heads/main` theo template hiện tại | `ReadOnlyAccess` và quyền riêng cho backend. Job plan hoặc drift có thể đọc state và tạo/xoá file khoá `.tflock`. Policy của role chỉ cấp quyền đọc trên file `terraform.tfstate`. |
-| `GhaApplyRole` (`…-gha-apply`) trong stack 03 | Job dùng GitHub Environment `development` hoặc `production` | `AdministratorAccess`. Workflow Terraform dùng role này khi apply hoặc destroy hạ tầng. |
-
-**Vì sao tách stack 01 và stack 03?** Người vận hành deploy stack 01 trước để GitHub Actions có role đăng nhập AWS lần đầu. Workflow bootstrap dùng role đó để deploy stack 02 rồi stack 03. Stack 03 cần ARN của bucket S3 và KMS key do stack 02 cung cấp. [Workflow Bootstrap](../.github/workflows/bootstrap.yaml)
-
-**Vì sao nên tách ba role?** Job kiểm tra pull request và drift chỉ cần đọc hạ tầng, đọc state và quản lý file khoá. Role riêng giúp các job đó chạy với quyền phù hợp. Bootstrap và apply hiện cùng có `AdministratorAccess`. Tách hai role này giúp mỗi workflow dùng một IAM identity với điều kiện truy cập riêng. Job dùng Environment `development` hoặc `production` khớp trust policy của `gha-apply`, còn `gha-bootstrap` yêu cầu Environment `bootstrap`. Cách tách này cũng cho phép siết quyền của từng role độc lập về sau.
 
 ## 7. Câu hỏi tự kiểm
 
