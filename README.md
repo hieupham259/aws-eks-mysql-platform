@@ -26,8 +26,8 @@ CI/CD nằm trong thiết kế từ đầu, nhưng được dựng từng lớp.
 |---|---|---|---|
 | 0. Đăng nhập và pipeline | GitHub Actions vào AWS bằng OIDC và IAM role, không lưu access key. Pull request sinh plan; merge sinh apply, có người duyệt; dò lệch; xoá | CloudFormation cho phần nền, GitHub Actions | [03](plans/03-trien-khai-oidc-roi-cicd.md), đã có code |
 | 1. Mạng và bucket | VPC với hai public subnet; bucket S3 cho backup | Terraform | [04](plans/04-terraform-networking-va-s3-backup.md) |
-| 2. Cluster và MySQL | cluster EKS, node group, add-on EBS CSI; rồi Percona Operator, cụm MySQL, theo đúng thứ tự phụ thuộc | file cấu hình eksctl, chart Helm, manifest và lệnh gõ trên máy, theo hai runbook. Tuỳ chọn: cluster, add-on và IAM bằng Terraform | chưa có plan |
-| 3. Kiểm chứng vận hành | kết nối, ghi đọc, giữ dữ liệu, failover, backup, restore; quy trình dọn | lệnh gõ trên máy, theo runbook | chưa có plan |
+| 2. Cluster và MySQL | cluster EKS, node group, add-on EBS CSI; rồi Percona Operator, cụm MySQL, theo đúng thứ tự phụ thuộc | file cấu hình eksctl, chart Helm, manifest và lệnh gõ trên máy, theo hai runbook. Tuỳ chọn: cluster, add-on và IAM bằng Terraform | [runbook cluster](runbooks/runbook-shared-infrastructure.md) và [runbook MySQL operator](runbooks/runbook-mysql-operator.md); chưa chạy thật |
+| 3. Kiểm chứng vận hành | kết nối, ghi đọc, giữ dữ liệu, failover, backup, restore; quy trình dọn | lệnh gõ trên máy, theo runbook | bước 6 → 13 của [runbook MySQL operator](runbooks/runbook-mysql-operator.md); chưa chạy thật |
 
 Từng thành phần được triển khai bằng cách nào, xem mục [Thiết kế chung](#thiết-kế-chung-phần-nào-bằng-iac-phần-nào-bằng-manifest-và-lệnh) ngay dưới.
 
@@ -38,6 +38,8 @@ Hạ tầng đích lấy từ bản thiết kế [VPC public subnet cho runbook 
 Dự án chia việc theo một mốc: **cluster**. Những thứ phải có trước cluster (đăng nhập cho CI, mạng, bucket backup) viết bằng IaC và đi qua pull request. Từ cluster trở đi (tạo EKS, cài add-on, cài MySQL, backup, restore, dọn) làm bằng manifest và lệnh gõ trên máy, đúng như hai runbook. Cuối mục có một [phương án tuỳ chọn](#tuỳ-chọn-dựng-cluster-add-on-và-iam-bằng-terraform) đưa cả cluster, add-on và IAM vào Terraform.
 
 Hai runbook đó nằm trong repo khoá học: [runbook hạ tầng dùng chung](https://github.com/hieupham259/DevOps-Projects-with-Kubernetes-on-AWS/blob/master/shared-infrastructure/runbook-shared-infrastructure.md), tạo cluster và cài add-on bằng eksctl, và [runbook bài 16](https://github.com/hieupham259/DevOps-Projects-with-Kubernetes-on-AWS/blob/master/Section%202/bai16-mysql-operator/runbook-mysql-operator.md), cài MySQL operator rồi backup và restore. Trong các bảng dưới, "chung" chỉ runbook thứ nhất, "bài 16" chỉ runbook thứ hai.
+
+Bản viết lại của hai runbook đó cho dự án này nằm ở thư mục `runbooks/`: [runbook cluster](runbooks/runbook-shared-infrastructure.md) dựng cluster trên VPC của Terraform, và [runbook MySQL operator](runbooks/runbook-mysql-operator.md) backup vào bucket của Terraform. Khi làm thật thì theo hai file này; số bước của chúng trùng với runbook gốc.
 
 | Cách triển khai | Dùng cho | Chạy ở đâu |
 |---|---|---|
@@ -73,7 +75,7 @@ Hai runbook đó nằm trong repo khoá học: [runbook hạ tầng dùng chung]
 - **`cluster.yaml` khác runbook ở đúng một khối, `vpc:`.** Runbook để eksctl tự dựng VPC và chỉ ghi `nat.gateway: Disable`. Ở đây VPC đã có sẵn, nên khối `vpc:` ghi ID của VPC và của hai public subnet. Khi đó eksctl không tạo route table, Internet Gateway hay NAT Gateway nào; phần mạng nó còn tạo là security group cho control plane và node group.
 - **Giá trị do Terraform sinh ra không ghi sẵn trong manifest:** VPC ID, subnet ID và tên bucket. Manifest giữ chỗ cho chúng, lệnh điền vào lúc chạy, như runbook sinh `cluster.yaml` bằng `cat <<EOF` và thay tên bucket bằng `sed`. Tên bucket đọc từ SSM parameter `/<môi trường>/aws-eks-mysql-platform/mysql-backup/bucket_name`, do module `mysql-backup` ghi. Tên môi trường đứng trước vì Parameter Store từ chối tên bắt đầu bằng `aws`. VPC ID và subnet ID chưa có parameter nào; xem [Quyết định còn mở](#quyết-định-còn-mở).
 - **Không có manifest cho IAM role của cluster, của node và của EBS CSI driver:** eksctl tự tạo. Cũng không có manifest cho StatefulSet, Service, PVC hay mật khẩu MySQL: operator tự dựng chúng từ object của cụm.
-- Các file nằm ở đâu trong repo do plan của lớp cluster và lớp MySQL quyết định.
+- Các file này không nằm sẵn trong repo: hai runbook ở `runbooks/` sinh chúng lúc chạy.
 
 ### Chạy bằng lệnh
 
@@ -175,12 +177,12 @@ Security group của node phải cho các luồng sau:
 | Security group của node | không viết: EKS tự gắn group của cluster | **đổi:** một security group trong VPC, viết bằng Terraform |
 | NACL | NACL mặc định của VPC | không đổi |
 | Subnet và public IPv4 | hai public subnet, `map_public_ip_on_launch = true` | không đổi: launch template không được khai subnet, và managed node group vẫn không tự gán IP public |
-| Internet Gateway, route table, DNS | như module `networking` | không đổi |
-| Output của module `networking` | `vpc_id`, `public_subnet_ids` | không đổi; `vpc_id` có thêm một nơi dùng là security group của node |
+| Internet Gateway, route table, DNS | như module `network` | không đổi |
+| Output của module `network` | `vpc_id`, `public_subnet_ids` | không đổi; `vpc_id` có thêm một nơi dùng là security group của node |
 
 - **Thay đổi duy nhất là security group của node.** Ở cách mặc định dự án không viết security group nào; ở phương án này phải viết một cái và tự chịu trách nhiệm về luật của nó.
-- **Security group đó nằm ở lớp cluster, không nằm trong module `networking`.** Nó là tài nguyên của VPC, cần `vpc_id`. Nhưng luật của nó nhắc tới security group của cluster, thứ chỉ có sau khi cluster được tạo. Đặt nó trong module mạng thì mạng phải chờ cluster, ngược thứ tự dựng.
-- **Module `networking` không phải sửa code.** Mục "Vì sao module này không có code Terraform cho security group và NACL" trong [README của module](modules/networking/README.md) chỉ còn đúng cho cách mặc định.
+- **Security group đó nằm ở lớp cluster, không nằm trong module `network`.** Nó là tài nguyên của VPC, cần `vpc_id`. Nhưng luật của nó nhắc tới security group của cluster, thứ chỉ có sau khi cluster được tạo. Đặt nó trong module mạng thì mạng phải chờ cluster, ngược thứ tự dựng.
+- **Module `network` không phải sửa code.** Mục "Vì sao module này không có code Terraform cho security group và NACL" trong [README của module](modules/network/README.md) chỉ còn đúng cho cách mặc định.
 
 So với cách mặc định, những thứ sau đổi theo:
 
@@ -233,6 +235,7 @@ Vì sao hai plan đọc đứng trước: plan 03 không giải thích lại kh�
 aws-eks-mysql-platform/
 ├── README.md
 ├── plans/                                # bốn plan
+├── runbooks/                             # hai runbook: dựng cluster bằng eksctl, rồi MySQL operator
 ├── notes/                                # tài liệu giải thích
 │   ├── OIDC-GUIDE.md                     #   kiến thức nền OIDC, dạng `sub` mới, role và trust policy của repo này
 │   └── CICD-CHAIN-OF-TRUST.md            #   chuỗi tin cậy theo thời gian: job nào dùng role nào
@@ -305,15 +308,15 @@ Thư mục này phải là gốc của repo, vì GitHub chỉ đọc `.github/wo
 | 3 | Role apply mang `AdministratorAccess` | giữ như dự án mẫu, bù bằng trust policy chỉ nhận Environment có tên trong `DEPLOY_ENVIRONMENTS`, và Environment có người duyệt | plan 03, giới hạn đã biết |
 | 4 | Có tạo private subnet không | không, chỉ giữ chỗ dải địa chỉ | plan 04, mục 10 |
 | 5 | Tên bucket backup | theo tên dự án và môi trường, không theo `dop-mysql-backup-<8 ký tự>` của runbook | plan 04, mục 10 |
-| 6 | Tên cluster | chưa chốt: `basic-cluster` như bản thiết kế, hoặc theo tên dự án | plan 04, mục 10 |
+| 6 | Tên cluster | `aws-eks-mysql-platform-development`, theo tên dự án và môi trường, để không lẫn với `basic-cluster` của khoá học trong cùng account | runbook cluster, bước 1 |
 | 7 | Công cụ cho lớp 2 và 3 | mặc định: file cấu hình eksctl, chart Helm, manifest và lệnh gõ trên máy, theo hai runbook. Tuỳ chọn: cluster, add-on và IAM bằng Terraform. Cả hai cách đều không chạy Helm trong workflow | README, mục Thiết kế chung |
 | 8 | IAM user, policy và access key của backup tạo bằng gì | mặc định: bằng lệnh, như bước 3 của runbook bài 16. Ở phương án tuỳ chọn: user và policy bằng Terraform, access key vẫn bằng lệnh | README, mục Thiết kế chung |
-| 9 | `cluster.yaml` lấy VPC ID và subnet ID từ đâu (chỉ ở cách mặc định) | chưa chốt: thêm SSM parameter ở plan 04, hoặc tra theo tag lúc chạy lệnh | chưa có plan |
+| 9 | `cluster.yaml` lấy VPC ID và subnet ID từ đâu (chỉ ở cách mặc định) | tra theo tag `Name` của VPC lúc chạy lệnh, rồi lưu vào file biến. Cách khác: thêm SSM parameter trong module `network` | runbook cluster, bước 3 |
 | 10 | IAM principal nào nhận access entry admin của cluster (chỉ ở phương án tuỳ chọn) | chưa chốt. ARN của nó chứa account ID nên không ghi thẳng trong code | chưa có plan |
 | 11 | Bộ luật của security group cho node (chỉ ở phương án tuỳ chọn) | chưa chốt: group riêng tự đủ luật, hoặc launch template khai cả group của cluster lẫn group riêng | chưa có plan |
 
 ## Những thứ cố ý không có
 
-- **Các manifest của mục Thiết kế chung** chưa được chép hay sinh lại ở đây: `cluster.yaml` và `addons.yaml` của runbook dùng chung, cùng ba file của `Section 2/operators/mysql` trong repo khoá học (`values-backup.yaml`, `backup.yaml`, `restore.yaml`). Lớp cluster và lớp MySQL chưa có plan; khi có, plan đó sẽ quyết định các file nằm ở đâu trong repo và lấy giá trị từ Terraform thế nào.
+- **Các manifest của mục Thiết kế chung không nằm thành file riêng trong repo:** `cluster.yaml`, `addons.yaml`, `values-backup.yaml`, `backup.yaml` và `restore.yaml`. Hai runbook ở `runbooks/` sinh chúng bằng `cat <<EOF` lúc chạy, vì chúng chứa VPC ID, subnet ID và tên bucket, là những giá trị chỉ có sau khi Terraform apply.
 - **Access key AWS** cho CI. Đây là điều dự án đặt ra để tránh.
 - **Cluster, node, NAT Gateway.** Bốn plan đầu dừng trước mọi thứ tốn tiền theo giờ. Chi phí duy nhất là KMS key của state, 1 USD mỗi tháng.
