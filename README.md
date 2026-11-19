@@ -4,7 +4,7 @@ Dự án này dựng lại bài 16 của khoá "DevOps Projects with Kubernetes 
 
 Chuỗi cần nối: **VPC → EKS → IAM → EBS CSI → MySQL → backup/restore (S3)**.
 
-**Trạng thái ngày 19/11/2026:** plan 03 đã chạy xong trên GitHub và AWS: ba stack nền đã được tạo, workflow Bootstrap và OIDC test đã xanh cho cả `development` và `production`. Terraform chưa apply lần nào; bước tiếp theo là plan 04.
+**Trạng thái ngày 20/11/2026:** plan 03 và plan 04 đã chạy thật. Terraform đã apply lên `development` qua pull request #1: một VPC và một bucket backup, 11 resource. Workflow dò lệch đang bị Disable, nên ô dò lệch của plan 04 được hoãn lại. `production` chưa deploy. Chưa có cluster nào: bước tiếp theo là hai runbook ở `runbooks/`, cả hai chưa chạy thật.
 
 ## Mục lục
 
@@ -25,7 +25,7 @@ CI/CD nằm trong thiết kế từ đầu, nhưng được dựng từng lớp.
 | Lớp | Nội dung | Công cụ | Plan |
 |---|---|---|---|
 | 0. Đăng nhập và pipeline | GitHub Actions vào AWS bằng OIDC và IAM role, không lưu access key. Pull request sinh plan; merge sinh apply, có người duyệt; dò lệch; xoá | CloudFormation cho phần nền, GitHub Actions | [03](plans/03-trien-khai-oidc-roi-cicd.md), đã có code |
-| 1. Mạng và bucket | VPC với hai public subnet; bucket S3 cho backup | Terraform | [04](plans/04-terraform-networking-va-s3-backup.md) |
+| 1. Mạng và bucket | VPC với hai public subnet; bucket S3 cho backup | Terraform | [04](plans/04-terraform-networking-va-s3-backup.md), đã deploy lên `development` |
 | 2. Cluster và MySQL | cluster EKS, node group, add-on EBS CSI; rồi Percona Operator, cụm MySQL, theo đúng thứ tự phụ thuộc | file cấu hình eksctl, chart Helm, manifest và lệnh gõ trên máy, theo hai runbook. Tuỳ chọn: cluster, add-on và IAM bằng Terraform | [runbook cluster](runbooks/runbook-shared-infrastructure.md) và [runbook MySQL operator](runbooks/runbook-mysql-operator.md); chưa chạy thật |
 | 3. Kiểm chứng vận hành | kết nối, ghi đọc, giữ dữ liệu, failover, backup, restore; quy trình dọn | lệnh gõ trên máy, theo runbook | bước 6 → 13 của [runbook MySQL operator](runbooks/runbook-mysql-operator.md); chưa chạy thật |
 
@@ -255,6 +255,9 @@ aws-eks-mysql-platform/
 │   ├── _shared/                          # code chung của mọi môi trường
 │   ├── development/                      # backend, provider, giá trị riêng
 │   └── production/                       # cùng năm file, khác key của state và giá trị
+├── modules/
+│   ├── network/                          # VPC, hai public subnet, Internet Gateway, route table
+│   └── mysql-backup/                     # bucket backup và SSM parameter chứa tên bucket
 ├── scripts/
 │   └── verify-envs-in-sync.sh            # so main.tf và variables.tf của hai thư mục env
 ├── .gitignore
@@ -262,9 +265,9 @@ aws-eks-mysql-platform/
 └── .terraform-version
 ```
 
-Toàn bộ code trên đi kèm plan 03. Resource Terraform duy nhất hiện có là một SSM parameter miễn phí; nó được tạo ở pull request đầu tiên của plan 04, khi các workflow Terraform chạy lần đầu. Thư mục `modules/` chưa có: plan 04 mô tả nó, code sẽ viết khi làm plan đó.
+Code của `bootstrap/` và `.github/` đi kèm plan 03. Hai module và phần nối trong `envs/` đi kèm plan 04. Terraform đang quản lý 11 resource ở `development`: 7 của mạng, 3 của bucket, 1 SSM parameter.
 
-Code đã được kiểm tra thế nào, và chưa được kiểm tra thế nào, ghi ở mục "Những gì đã đối chiếu" của plan 03.
+Code đã được kiểm tra thế nào, và chưa được kiểm tra thế nào, ghi ở mục "Những gì đã đối chiếu" của plan 03 và plan 04.
 
 Hai file trong `notes/` là bản viết lại của hai tài liệu cùng tên ở dự án mẫu, theo dạng `sub` mới và theo code của repo này. `SETUP-GUIDE.md` của dự án mẫu không có bản viết lại riêng: việc của nó ở repo này do plan 03 đảm nhận.
 
@@ -306,7 +309,7 @@ Thư mục này phải là gốc của repo, vì GitHub chỉ đọc `.github/wo
 | 1 | Repo public hay private | public, vì gói Free, Pro và Team chỉ cho đặt người duyệt Environment ở repo public | plan 03, bước 1 |
 | 2 | Số account AWS | hai môi trường chung một account: `PRODUCTION_ACCOUNT_ID` cùng giá trị với `DEVELOPMENT_ACCOUNT_ID`. Code đã sẵn cho hai account; `production` chưa deploy | plan 03, bước 3 |
 | 3 | Role apply mang `AdministratorAccess` | giữ như dự án mẫu, bù bằng trust policy chỉ nhận Environment có tên trong `DEPLOY_ENVIRONMENTS`, và Environment có người duyệt | plan 03, giới hạn đã biết |
-| 4 | Có tạo private subnet không | không, chỉ giữ chỗ dải địa chỉ | plan 04, mục 10 |
+| 4 | Có tạo private subnet không | không tạo | plan 04, mục 10 |
 | 5 | Tên bucket backup | theo tên dự án và môi trường, không theo `dop-mysql-backup-<8 ký tự>` của runbook | plan 04, mục 10 |
 | 6 | Tên cluster | `aws-eks-mysql-platform-development`, theo tên dự án và môi trường, để không lẫn với `basic-cluster` của khoá học trong cùng account | runbook cluster, bước 1 |
 | 7 | Công cụ cho lớp 2 và 3 | mặc định: file cấu hình eksctl, chart Helm, manifest và lệnh gõ trên máy, theo hai runbook. Tuỳ chọn: cluster, add-on và IAM bằng Terraform. Cả hai cách đều không chạy Helm trong workflow | README, mục Thiết kế chung |

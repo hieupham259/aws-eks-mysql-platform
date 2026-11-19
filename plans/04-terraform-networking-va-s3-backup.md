@@ -2,7 +2,7 @@
 
 Plan này đưa lên AWS phần Terraform đầu tiên có ích thật: một VPC đúng hình dạng mà bài 16 cần, và một bucket S3 để chứa backup MySQL. Cả hai đi qua pull request, plan, duyệt, apply, bằng bốn workflow Terraform mô tả ở [plan 03](03-trien-khai-oidc-roi-cicd.md#bốn-workflow-terraform-chạy-theo-nhánh-thế-nào). Chưa có cluster nào, nên chưa tốn tiền.
 
-**Trạng thái ngày 20/11/2026:** code đã viết và đã deploy lên `development` bằng pull request #1. Hạ tầng đã được kiểm trên AWS và đạt. Còn một ô chưa chốt: chạy workflow dò lệch, xem [Chốt plan 04](#chốt-plan-04). `production` chưa deploy.
+**Trạng thái ngày 20/11/2026:** code đã viết và đã deploy lên `development` bằng pull request #1. Hạ tầng đã được kiểm trên AWS và đạt. Ô dò lệch được hoãn: workflow dò lệch đang bị Disable để ưu tiên dựng cluster theo runbook, xem [Chốt plan 04](#chốt-plan-04). `production` chưa deploy.
 
 Bản đầu của plan này viết ngày 17/11/2026, trước khi có code. Code thật khác bản đó ở vài điểm, ghi ở mục [Khác bản thiết kế ban đầu ở đâu](#khác-bản-thiết-kế-ban-đầu-ở-đâu). Các mục còn lại mô tả code đang có trong repo.
 
@@ -40,7 +40,7 @@ Ngày **20/11/2026**, sau khi viết code và deploy:
 - State của `development` có 11 resource: 7 của mạng, 3 của bucket, 1 SSM parameter.
 - Các lệnh kiểm chứng ở mục 7 đã chạy trên AWS; mọi chốt PASS.
 - Tên của SSM parameter được đối chiếu với tài liệu `PutParameter` của AWS. Thử bằng lệnh chỉ đọc `get-parameters-by-path`: dịch vụ từ chối đường dẫn `/aws-eks-mysql-platform`, và nhận `/development/aws-eks-mysql-platform`.
-- **Chưa làm:** chạy workflow dò lệch sau khi deploy; bài thử dò lệch ở mục 8; deploy `production`.
+- **Chưa làm:** chạy workflow dò lệch sau khi deploy (hoãn, workflow đang bị Disable); bài thử dò lệch ở mục 8; deploy `production`.
 
 ## Khác bản thiết kế ban đầu ở đâu
 
@@ -415,10 +415,12 @@ aws s3api list-buckets --query "Buckets[?contains(Name, 'tfstate') || contains(N
 
 - [x] Terraform đang quản lý 11 resource ở `development`: 7 của mạng, 3 của bucket, 1 parameter tên bucket. Đếm trong state ngày 20/11/2026.
 - [x] Mọi thay đổi đi qua pull request #1. Các lệnh `aws` chạy từ máy trong lúc kiểm chứng đều chỉ đọc.
-- [ ] Workflow **Terraform Drift Detection** chạy từ `master` sau khi deploy: job của `development` xanh. Job của `production` còn đỏ cho tới khi `production` được deploy.
+- [ ] **Hoãn.** Workflow **Terraform Drift Detection** chạy từ `master` sau khi deploy: job của `development` xanh. Job của `production` còn đỏ cho tới khi `production` được deploy.
 - [x] `master` và `development` có cùng nội dung. Code đi từ `master` vào `development` qua pull request #1, nên không cần pull request theo chiều ngược lại.
 
-Ô còn lại làm thế này: **Actions → Terraform Drift Detection → Run workflow** → nhánh `master`. Nếu đã Disable workflow này ở plan 03 thì bật lại trước. Lần chạy theo lịch lúc 01:00 ngày 20/11/2026 diễn ra trước khi apply xong, nên không tính.
+Ô dò lệch được hoãn từ ngày 20/11/2026: workflow **Terraform Drift Detection** đang bị Disable, vì việc kế tiếp là dựng cluster theo [runbook cluster](../runbooks/runbook-shared-infrastructure.md). Trong lúc workflow tắt, không có gì kiểm hằng đêm rằng VPC và bucket còn đúng như code.
+
+Khi quay lại làm ô này: **Actions → Terraform Drift Detection → ··· → Enable workflow**, rồi **Run workflow** → nhánh `master`. Nên làm lúc không có cluster trong VPC, hoặc biết trước điều sau: chưa kiểm được việc tạo cluster có làm job dò lệch đỏ hay không. Nếu EKS hay eksctl gắn thêm tag lên subnet thì `terraform plan` sẽ coi tag đó là thứ lệch.
 
 Job dò lệch chạy `terraform plan` cho từng môi trường bằng role chỉ đọc. Xanh nghĩa là AWS đang đúng như code; đỏ nghĩa là có thứ lệch, hoặc môi trường chưa được deploy.
 
