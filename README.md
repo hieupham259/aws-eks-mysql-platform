@@ -71,7 +71,7 @@ Hai runbook đó nằm trong repo khoá học: [runbook hạ tầng dùng chung]
 | `restore.yaml`, object `PerconaServerMySQLRestore` tên `restore1` | khôi phục cụm `shop-ps-db` từ `backup1` | `kubectl apply -f` | bài 16, 11 |
 
 - **`cluster.yaml` khác runbook ở đúng một khối, `vpc:`.** Runbook để eksctl tự dựng VPC và chỉ ghi `nat.gateway: Disable`. Ở đây VPC đã có sẵn, nên khối `vpc:` ghi ID của VPC và của hai public subnet. Khi đó eksctl không tạo route table, Internet Gateway hay NAT Gateway nào; phần mạng nó còn tạo là security group cho control plane và node group.
-- **Giá trị do Terraform sinh ra không ghi sẵn trong manifest:** VPC ID, subnet ID và tên bucket. Manifest giữ chỗ cho chúng, lệnh điền vào lúc chạy, như runbook sinh `cluster.yaml` bằng `cat <<EOF` và thay tên bucket bằng `sed`. Tên bucket đọc từ SSM parameter `/aws-eks-mysql-platform/<môi trường>/mysql-backup/bucket_name` (plan 04). VPC ID và subnet ID chưa có parameter nào; xem [Quyết định còn mở](#quyết-định-còn-mở).
+- **Giá trị do Terraform sinh ra không ghi sẵn trong manifest:** VPC ID, subnet ID và tên bucket. Manifest giữ chỗ cho chúng, lệnh điền vào lúc chạy, như runbook sinh `cluster.yaml` bằng `cat <<EOF` và thay tên bucket bằng `sed`. Tên bucket đọc từ SSM parameter `/<môi trường>/aws-eks-mysql-platform/mysql-backup/bucket_name`, do module `mysql-backup` ghi. Tên môi trường đứng trước vì Parameter Store từ chối tên bắt đầu bằng `aws`. VPC ID và subnet ID chưa có parameter nào; xem [Quyết định còn mở](#quyết-định-còn-mở).
 - **Không có manifest cho IAM role của cluster, của node và của EBS CSI driver:** eksctl tự tạo. Cũng không có manifest cho StatefulSet, Service, PVC hay mật khẩu MySQL: operator tự dựng chúng từ object của cụm.
 - Các file nằm ở đâu trong repo do plan của lớp cluster và lớp MySQL quyết định.
 
@@ -126,14 +126,15 @@ Ba điều giữ cho thứ tự dọn đúng:
 
 ### Tuỳ chọn: dựng cluster, add-on và IAM bằng Terraform
 
-Phương án này thay eksctl bằng Terraform: cluster, node group, add-on và IAM cũng đi qua pull request, như VPC và bucket. Lớp MySQL và phần kiểm chứng không đổi, vẫn là manifest và lệnh của runbook bài 16.
+Phương án này thay eksctl bằng Terraform: cluster, node group, add-on và IAM cũng đi qua pull request, như VPC và bucket. Node group dùng một launch template riêng, trong đó khai security group của node do dự án tự viết. Lớp MySQL và phần kiểm chứng không đổi, vẫn là manifest và lệnh của runbook bài 16.
 
 Cách mặc định của dự án vẫn là eksctl, như các mục trên. Mỗi môi trường chọn một trong hai cách cho cluster, không dùng lẫn: cluster do eksctl tạo thì không nằm trong state của Terraform. Phương án này chưa có plan và chưa có code.
 
 | Thành phần | Cách mặc định, theo runbook | Phương án Terraform |
 |---|---|---|
 | Cluster EKS 1.36, API endpoint public, xác thực kiểu `API` | `cluster.yaml` và `eksctl create cluster` (chung, bước 3 và 6) | Terraform |
-| Managed node group 3 × `t3.large`, Amazon Linux 2023; IAM role của cluster và của node | khối `managedNodeGroups`; role do eksctl tự tạo | Terraform, khai rõ từng role |
+| Managed node group 3 × `t3.large`, Amazon Linux 2023; IAM role của cluster và của node | khối `managedNodeGroups`; role do eksctl tự tạo | Terraform, khai rõ từng role. Node group dùng một launch template riêng |
+| Security group của node | không viết: EKS tự gắn security group của cluster vào node | Terraform: một security group riêng, khai trong launch template |
 | Add-on nền `vpc-cni`, `coredns`, `kube-proxy` | eksctl tự cài, kèm `metrics-server` (chung, bước 6) | Terraform; bài 16 không dùng tới `metrics-server` |
 | Quyền admin cluster cho người gõ `kubectl` | `bootstrapClusterCreatorAdminPermissions: true`: người tạo cluster chính là người gõ lệnh | Terraform, một access entry riêng |
 | Add-on `eks-pod-identity-agent` và `aws-ebs-csi-driver`, ghim phiên bản; StorageClass mặc định `ebs-csi-default-sc`; tag `lab-cluster` trên mọi ổ EBS | `addons.yaml` và `eksctl create addon` (chung, bước 8.2) | Terraform, add-on EKS kèm cấu hình |
@@ -146,6 +147,41 @@ Cách mặc định của dự án vẫn là eksctl, như các mục trên. Mỗ
 - **EBS CSI driver và StorageClass mặc định chạy trong cluster nhưng Terraform khai được.** Chúng là add-on do EKS quản lý, bật qua API của AWS.
 - **Access key vẫn tạo bằng lệnh.** Terraform tạo thì phần bí mật của key nằm trong state. Lệnh ở bước 3 của runbook bài 16 đưa key thẳng vào Secret, không qua file nào.
 
+#### Node group dùng launch template có security group riêng
+
+Ở cách mặc định, EKS tự gắn security group của cluster vào node. Ở phương án này, node group dùng một launch template do dự án viết, và launch template khai security group của node.
+
+Theo tài liệu EKS (đối chiếu ngày 20/11/2026), khi launch template đã khai security group thì EKS không gắn security group của cluster vào node nữa. Luật của group riêng phải tự đủ; sai thì node không vào được cluster.
+
+Security group của node phải cho các luồng sau:
+
+| Luồng | Luật cần có |
+|---|---|
+| Node với node, Pod với Pod: DNS, MySQL, replication, HAProxy, Job backup gọi sidecar | nhận mọi traffic từ chính group |
+| Control plane gọi xuống node: kubelet, cho `kubectl logs`, `exec`, `port-forward` | nhận từ security group của cluster, tối thiểu cổng 10250; thêm cổng của webhook nếu cluster có dùng |
+| Node và Pod đi ra: API endpoint public, registry, S3, EC2 API, EKS Auth | cho mọi traffic đi ra |
+| Từ Internet vào node | không mở gì: không 3306, không SSH |
+
+- **Luật này cũng là luật cho Pod.** Pod lấy IP từ card mạng (ENI) của node, nên traffic của Pod đi qua security group của node.
+- **Launch template không khai AMI.** Node group vẫn chọn Amazon Linux 2023. Khai AMI thì EKS không tự chèn cấu hình khởi động, phải tự viết để node vào được cluster.
+- **Dung lượng ổ của node khai trong launch template.** Đã dùng launch template thì không khai nó ở node group được nữa.
+- **Launch template không khai subnet và IAM instance profile.** Hai thứ này vẫn khai ở node group.
+- **Bộ luật cụ thể do plan của lớp cluster chốt.** Một cách ít rủi ro hơn để bắt đầu: launch template khai cả security group của cluster lẫn group riêng. Node khi đó vẫn là thành viên của group mặc định, group riêng chỉ thêm luật.
+
+#### Thiết kế VPC đổi gì ở phương án này
+
+| Phần của VPC | Cách mặc định | Phương án này |
+|---|---|---|
+| Security group của node | không viết: EKS tự gắn group của cluster | **đổi:** một security group trong VPC, viết bằng Terraform |
+| NACL | NACL mặc định của VPC | không đổi |
+| Subnet và public IPv4 | hai public subnet, `map_public_ip_on_launch = true` | không đổi: launch template không được khai subnet, và managed node group vẫn không tự gán IP public |
+| Internet Gateway, route table, DNS | như module `networking` | không đổi |
+| Output của module `networking` | `vpc_id`, `public_subnet_ids` | không đổi; `vpc_id` có thêm một nơi dùng là security group của node |
+
+- **Thay đổi duy nhất là security group của node.** Ở cách mặc định dự án không viết security group nào; ở phương án này phải viết một cái và tự chịu trách nhiệm về luật của nó.
+- **Security group đó nằm ở lớp cluster, không nằm trong module `networking`.** Nó là tài nguyên của VPC, cần `vpc_id`. Nhưng luật của nó nhắc tới security group của cluster, thứ chỉ có sau khi cluster được tạo. Đặt nó trong module mạng thì mạng phải chờ cluster, ngược thứ tự dựng.
+- **Module `networking` không phải sửa code.** Mục "Vì sao module này không có code Terraform cho security group và NACL" trong [README của module](modules/networking/README.md) chỉ còn đúng cho cách mặc định.
+
 So với cách mặc định, những thứ sau đổi theo:
 
 | | Cách mặc định | Phương án Terraform |
@@ -155,6 +191,7 @@ So với cách mặc định, những thứ sau đổi theo:
 | Quyền IAM trên máy | rộng, để eksctl tạo cluster | không cần quyền tạo cluster; vẫn cần quyền tạo access key cho IAM user backup |
 | Kubeconfig | eksctl tự ghi | lấy bằng `aws eks update-kubeconfig` |
 | VPC ID và subnet ID | phải điền vào `cluster.yaml` | Terraform tự nối, không phải tra |
+| Security group của node | EKS và eksctl tự lo | tự viết bằng Terraform, gắn qua launch template |
 | Xem trước khi tạo | `eksctl create cluster --dry-run` | job plan ở pull request |
 | Dò lệch | không thấy cluster | thấy cả cluster, add-on và IAM |
 | Xoá cluster | `eksctl delete cluster` | workflow Terraform Destroy |
@@ -162,7 +199,7 @@ So với cách mặc định, những thứ sau đổi theo:
 Dựng:
 
 1. **IaC nền** (đã xong): ba stack CloudFormation của plan 03.
-2. **Terraform, qua pull request**: VPC và bucket backup; rồi cluster, node group, access entry; rồi add-on, IAM role của driver, IAM user và policy của backup. Kiểm tra hạn mức vCPU (chung, bước 2) trước lần apply cluster đầu tiên.
+2. **Terraform, qua pull request**: VPC và bucket backup; rồi cluster, security group của node, launch template, node group, access entry; rồi add-on, IAM role của driver, IAM user và policy của backup. Kiểm tra hạn mức vCPU (chung, bước 2) trước lần apply cluster đầu tiên.
 3. **Lệnh**: lấy kubeconfig, kiểm tra cluster và add-on (chung, bước 7 và phần kiểm tra của 8.2).
 4. **Manifest và lệnh, runbook bài 16**: namespace, access key và Secret, operator, cụm MySQL; rồi các bước kiểm chứng. Bỏ ba lệnh tạo IAM user và policy ở bước 3.
 
@@ -273,6 +310,7 @@ Thư mục này phải là gốc của repo, vì GitHub chỉ đọc `.github/wo
 | 8 | IAM user, policy và access key của backup tạo bằng gì | mặc định: bằng lệnh, như bước 3 của runbook bài 16. Ở phương án tuỳ chọn: user và policy bằng Terraform, access key vẫn bằng lệnh | README, mục Thiết kế chung |
 | 9 | `cluster.yaml` lấy VPC ID và subnet ID từ đâu (chỉ ở cách mặc định) | chưa chốt: thêm SSM parameter ở plan 04, hoặc tra theo tag lúc chạy lệnh | chưa có plan |
 | 10 | IAM principal nào nhận access entry admin của cluster (chỉ ở phương án tuỳ chọn) | chưa chốt. ARN của nó chứa account ID nên không ghi thẳng trong code | chưa có plan |
+| 11 | Bộ luật của security group cho node (chỉ ở phương án tuỳ chọn) | chưa chốt: group riêng tự đủ luật, hoặc launch template khai cả group của cluster lẫn group riêng | chưa có plan |
 
 ## Những thứ cố ý không có
 

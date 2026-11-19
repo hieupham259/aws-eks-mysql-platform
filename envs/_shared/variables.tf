@@ -8,7 +8,19 @@ variable "environment" {
   description = "Environment name. Equals the branch name and the directory under envs/."
 }
 
-variable "cicd_canary_value" {
+variable "region" {
   type        = string
-  description = "Value of the CI/CD canary parameter. Change it in a pull request to exercise plan and apply."
+  description = "AWS region"
+}
+
+# --- Network ---
+variable "vpc_cidr" {
+  type        = string
+  default     = "192.168.0.0/16"
+  description = "CIDR block of the VPC when self-created"
+}
+
+variable "tags" {
+  type    = map(string)
+  default = {}
 }

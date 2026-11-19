@@ -174,6 +174,25 @@ Thiết kế sử dụng các đặc tính mặc định cần cho lab:
 
 File này không thay bộ luật mặc định bằng một bộ “tối thiểu” mới, vì làm vậy có thể chặn các cổng nội bộ của Percona. Những luồng cần hoạt động gồm DNS, client MySQL, replication, HAProxy và HTTP nội bộ giữa Job backup với sidecar XtraBackup. Giữ luật nội bộ mặc định sẽ không làm hỏng các luồng đó.
 
+### Vì sao module này không có code Terraform cho security group và NACL
+
+Module `networking` chỉ khai VPC, subnet, Internet Gateway và route table. Nó không khai security group hay NACL nào, vì với cấu hình của dự án, phần mặc định của AWS đã đủ. Đối chiếu tài liệu AWS và Terraform ngày **20/11/2026**.
+
+**Security group.** Dự án dùng managed node group `ng-1` và không gắn security group riêng cho node. Khi tạo cluster, EKS tự tạo một security group tên `eks-cluster-sg-<tên cluster>-<mã>` với hai luật mặc định: nhận mọi traffic từ chính các thành viên của group, và cho mọi traffic đi ra. EKS tự gắn group này vào ENI của control plane và vào node của mọi managed node group. Vì vậy `ng-1` không cần security group nào viết bằng Terraform. Điều này đúng cho cách dựng mặc định của dự án, bằng eksctl. Phương án tuỳ chọn bằng Terraform cố ý rơi vào trường hợp đầu tiên trong danh sách dưới đây: node group dùng launch template có security group riêng. Khi đó security group của node được viết ở lớp cluster, không ở module này; xem [README gốc](../../README.md#node-group-dùng-launch-template-có-security-group-riêng).
+
+Phải tự viết security group cho node khi rơi vào một trong các trường hợp sau:
+
+- **Managed node group dùng launch template có khai security group riêng.** EKS không gắn group mặc định nữa; luật sai thì node không vào được cluster.
+- **Node tự quản**, tức không phải managed node group. EKS không gắn gì cho chúng. eksctl tạo giúp một group dùng chung cùng các luật cần thiết; dựng bằng Terraform thì phải tự viết.
+- **Siết luật mặc định**, ví dụ bỏ luật cho đi ra mọi nơi. Khi đó phải thêm lại tối thiểu cổng 443, 10250, DNS 53 và đường ra để kéo image.
+- **Cần traffic từ ngoài cluster vào node** (SSH, NodePort mở ra ngoài), hoặc node gọi tới tài nguyên có security group riêng như RDS. Luật mặc định chỉ nhận traffic từ trong group, nên bên ngoài không vào được. Với lab này đó là điều mong muốn: MySQL không bị lộ ra.
+
+Một chỗ hay nhầm: security group khai thêm lúc tạo cluster chỉ được gắn vào ENI của control plane, không gắn vào node.
+
+**NACL.** VPC nào cũng có sẵn một NACL mặc định cho mọi traffic vào và ra, và subnet không gắn NACL riêng thì tự dùng nó. Hai public subnet của module vì thế đã thông cả chiều đi lẫn chiều về. Module không khai `aws_network_acl`, và cũng không khai `aws_default_network_acl`: khai resource sau để quản lý NACL mặc định thì Terraform xoá hết luật có sẵn, chỉ giữ những luật viết trong code.
+
+Nguồn: [EKS, security group requirements](https://docs.aws.amazon.com/eks/latest/userguide/sec-group-reqs.html); [EKS, launch template và security group riêng](https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html#launch-template-security-groups); [VPC, default network ACL](https://docs.aws.amazon.com/vpc/latest/userguide/default-network-acl.html); [Terraform, `aws_default_network_acl`](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/default_network_acl).
+
 ### Public node không có nghĩa public MySQL
 
 Các Service của cụm MySQL giữ loại nội bộ như chart/runbook:
