@@ -15,6 +15,7 @@ Plan này đưa repo mới tới chỗ GitHub Actions vào được AWS mà khô
 - [Phần 1: Dựng OIDC](#phần-1-dựng-oidc)
 - [Phần 2: Thử bằng một pull request](#phần-2-thử-bằng-một-pull-request)
 - [Bốn workflow Terraform chạy theo nhánh thế nào](#bốn-workflow-terraform-chạy-theo-nhánh-thế-nào)
+- [Khoá nút Merge cho tới khi check xanh (tuỳ chọn)](#khoá-nút-merge-cho-tới-khi-check-xanh-tuỳ-chọn)
 - [Dọn toàn bộ](#dọn-toàn-bộ)
 - [Khi gặp lỗi](#khi-gặp-lỗi)
 - [Giới hạn đã biết](#giới-hạn-đã-biết)
@@ -273,6 +274,33 @@ Danh sách môi trường vẫn ghi tay ở ba kiểu chỗ, vì GitHub bắt ch
 
 Workflow dò lệch có lịch chạy mỗi đêm kể từ lúc file nằm trên `master`, và sẽ đỏ cho tới khi môi trường được deploy ở plan 04. Muốn tránh email báo đỏ thì **Actions → Terraform Drift Detection → ··· → Disable workflow**, rồi bật lại ở plan 04.
 
+## Khoá nút Merge cho tới khi check xanh (tuỳ chọn)
+
+Mặc định GitHub không chặn merge khi check còn đang chạy hoặc đã đỏ. Workflow chỉ tạo ra check; bắt check phải xanh là một luật riêng của nhánh, đặt trong Settings chứ không nằm trong code. Chưa có luật đó thì nút **Merge pull request** bấm được ngay cả khi `sync-check` còn ở trạng thái Queued, như đã thấy ở pull request ngày 20/11/2026.
+
+Không bật luật này thì lớp chặn còn lại là bước chờ duyệt của job `apply` ở Environment.
+
+Muốn GitHub khoá nút Merge cho tới khi check xong, bật luật cho nhánh:
+
+1. Vào **Settings** của repo. Ở cột trái, nhóm **Code, planning, and automation**, bấm **Branches**.
+2. Dưới **Branch protection rules**, bấm **Add classic branch protection rule**. Ô tick ở bước 4 chỉ hiện ra sau khi bấm nút này; trang **Branches** lúc đầu không có nó.
+3. Ở **Branch name pattern**, gõ `development`.
+4. Tick **Require status checks to pass before merging**. Một ô tìm kiếm hiện ra bên dưới: tìm và chọn hai check `sync-check` và `plan`. GitHub chỉ cho chọn những check đã từng chạy, nên phải làm sau khi một pull request Terraform đã chạy xong lần đầu.
+5. Bấm **Create**. Làm lại từ bước 2 cho `production`.
+
+Nếu bấm nhầm **Add branch ruleset** thì đó là giao diện Rulesets, tên các mục khác đi: đặt **Enforcement status** là **Active**, thêm nhánh ở **Target branches**, rồi tìm luật về status check trong phần **Branch protections**.
+
+Đọc hai điều sau trước khi bật:
+
+- **Bộ lọc `paths` của `terraform-plan.yaml` sẽ làm kẹt pull request không đụng tới Terraform.** Workflow này chỉ chạy khi pull request đổi `envs/`, `modules/`, `scripts/` hoặc chính file workflow. Theo tài liệu GitHub, check của một workflow bị bỏ qua vì bộ lọc đường dẫn sẽ đứng mãi ở Pending và chặn merge. Một pull request chỉ sửa README hay plan vì thế không merge được. Có hai cách:
+  - bỏ khối `paths:` trong `terraform-plan.yaml`, để workflow chạy ở mọi pull request vào hai nhánh môi trường; đổi lại mỗi pull request tốn một lần plan;
+  - giữ `paths:`, không đặt check bắt buộc, và tự chờ check xanh rồi mới merge.
+- **Chủ repo vẫn vượt được luật**, trừ khi tick thêm **Do not allow bypassing the above settings** ở luật tạo trong **Settings → Branches**.
+
+**PASS:** mở một pull request có đổi Terraform. Khi check còn chạy, nút merge bị khoá và GitHub báo còn check bắt buộc chưa xong; check xanh thì nút mở lại.
+
+Mục này viết ngày 20/11/2026 theo tài liệu GitHub; luật chưa được bật trên repo.
+
 ## Dọn toàn bộ
 
 Chỉ làm khi bỏ hẳn dự án. Nếu Terraform đã tạo hạ tầng (từ plan 04 trở đi) thì chạy workflow **Terraform Destroy** trước, khi role còn tồn tại.
@@ -294,7 +322,7 @@ Ba thứ được giữ lại sau khi xoá stack, phải xử lý tay:
 - **KMS key:** **KMS → Customer managed keys** → key có mô tả `Encrypts the Terraform state of aws-eks-mysql-platform` → **Schedule key deletion**, 7 ngày. Key tốn 1 USD mỗi tháng cho tới lúc đặt lịch xoá; đây là chi phí duy nhất của plan này.
 - **OIDC provider:** để nguyên nếu account còn dự án khác dùng GitHub OIDC, ví dụ dự án mẫu.
 
-Trên GitHub: xoá ba Environment và bốn biến.
+Trên GitHub: xoá ba Environment, bốn biến, và luật nhánh nếu đã bật.
 
 ## Khi gặp lỗi
 
@@ -319,7 +347,7 @@ Trên GitHub: xoá ba Environment và bốn biến.
 - Plan này chỉ thử trường hợp vào được role. Không có bước thử các trường hợp phải bị từ chối.
 - Các điểm đến từ việc giữ đúng khung workflow Terraform của dự án mẫu:
   - job `apply` chờ duyệt trước khi chạy plan, nên bản plan để đọc là comment ở pull request;
-  - bộ lọc `paths` khiến job `plan` không đặt làm check bắt buộc được;
+  - bộ lọc `paths` khiến job `plan` không đặt làm check bắt buộc được, trừ khi bỏ bộ lọc đó; xem [Khoá nút Merge cho tới khi check xanh](#khoá-nút-merge-cho-tới-khi-check-xanh-tuỳ-chọn);
   - workflow apply chỉ chạy khi có push;
   - workflow destroy không in trước những gì sẽ xoá;
   - job dò lệch của một môi trường chưa deploy sẽ đỏ.
