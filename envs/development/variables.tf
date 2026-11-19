@@ -17,8 +17,3 @@ variable "region" {
   type        = string
   description = "AWS region of every resource in this environment."
 }
-
-variable "cicd_canary_value" {
-  type        = string
-  description = "Value of the CI/CD canary parameter. Change it in a pull request to exercise plan and apply."
-}

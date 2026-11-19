@@ -1,18 +1,23 @@
 locals {
-  name_prefix = "${var.project}-${var.environment}"
+  common_tags = merge(var.tags, {
+    Environment = var.environment
+    Project     = var.project
+    ManagedBy   = "terraform"
+  })
 }
 
-# CI/CD canary: a free, harmless resource. It lets the pipeline prove that it
-# can plan, apply, detect drift and destroy before real infrastructure exists.
-#   - Change var.cicd_canary_value in a pull request to see a plan and an apply.
-#   - Change the value directly in AWS to see drift detection fail.
-resource "aws_ssm_parameter" "cicd_canary" {
-  name        = "/${var.project}/${var.environment}/cicd/canary"
-  description = "CI/CD canary managed by Terraform. Do not edit by hand, except to test drift detection."
-  type        = "String"
-  value       = var.cicd_canary_value
+module "network" {
+  source = "../../modules/network"
 
-  tags = {
-    Name = "${local.name_prefix}-cicd-canary"
-  }
+  environment = var.environment
+  tags        = local.common_tags
+  project     = var.project
+  vpc_cidr    = var.vpc_cidr
+}
+module "mysql_backup" {
+  source = "../../modules/mysql-backup"
+
+  environment = var.environment
+  tags        = local.common_tags
+  project     = var.project
 }
