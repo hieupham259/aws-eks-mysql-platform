@@ -10,6 +10,7 @@ Chuỗi cần nối: **VPC → EKS → IAM → EBS CSI → MySQL → backup/rest
 
 - [Dự án gồm những lớp nào](#dự-án-gồm-những-lớp-nào)
 - [Thiết kế chung: phần nào bằng IaC, phần nào bằng manifest và lệnh](#thiết-kế-chung-phần-nào-bằng-iac-phần-nào-bằng-manifest-và-lệnh)
+  - [Operator: bước nào của runbook cài gì](#operator-bước-nào-của-runbook-cài-gì)
 - [Các file plan: vai trò và lý do có mặt](#các-file-plan-vai-trò-và-lý-do-có-mặt)
 - [Trong thư mục đang có gì](#trong-thư-mục-đang-có-gì)
 - [Quy ước của dự án](#quy-ước-của-dự-án)
@@ -96,6 +97,40 @@ Bản viết lại của hai runbook đó cho dự án này nằm ở thư mục
 - **Người gõ `eksctl create cluster` là người tạo cluster**, nên tự có quyền admin, như runbook. Việc này cần quyền IAM rộng trên máy: bước 0 của runbook dùng chung khuyên `AdministratorAccess`.
 - **eksctl vẫn dựng cluster bằng CloudFormation**, qua hai stack `eksctl-<tên cluster>-cluster` và `eksctl-<tên cluster>-nodegroup-ng-1`. Hai stack này do lệnh trên máy tạo, không đi qua pull request và không nằm trong `bootstrap/`.
 - **IAM user và policy của backup làm như bước 3 của runbook**, chỉ khác ở tên bucket: lấy từ SSM thay vì sinh ngẫu nhiên.
+
+### Operator: bước nào của runbook cài gì
+
+`ps-operator` mang vào cluster các CRD cùng chương trình controller, còn `ps-db` nộp một tờ đơn xin một custom resource cụ thể với `kind` là `PerconaServerMySQL`. Ở đây "mẫu đơn" là CRD: nó dạy Kubernetes một loại object mới. "Tờ đơn" là custom resource: một object cụ thể viết theo mẫu đó.
+
+Bốn bước dưới đây đều thuộc [runbook MySQL operator](runbooks/runbook-mysql-operator.md).
+
+**Bước 4, `helm repo add percona ...` và `helm repo update`:** ghi địa chỉ kho chart của Percona vào máy bạn rồi tải danh mục về. Sau hai lệnh này cluster chưa có gì mới.
+
+**Bước 4, `helm install ps-operator percona/ps-operator --version 1.2.0 -n ps --wait`:** cài operator vào namespace `ps`. Cluster có thêm ba thứ:
+
+- **4 CRD**, tức 4 mẫu đơn: `perconaservermysqls` để xin một cụm MySQL, `perconaservermysqlbackups` để xin một bản backup, `perconaservermysqlrestores` để xin khôi phục, và `perconaservermysqlclustersets` mà bài này không dùng. Cả bốn đều có đuôi `.ps.percona.com`.
+- **Một pod `ps-operator-...`** chạy chương trình controller. Nó đứng canh trong namespace `ps`; có tờ đơn mới là nó đi làm.
+- **Các quyền** để controller được phép tạo pod, ổ đĩa và Secret trong namespace `ps`.
+
+Xong bước 4 chưa có MySQL nào.
+
+**Bước 5, `helm install shop percona/ps-db --version 1.2.0 -n ps -f values-backup.yaml`:** nộp một tờ đơn ghi "tôi muốn một cụm MySQL, backup vào bucket này". Tờ đơn có `kind: PerconaServerMySQL`, tên là `shop-ps-db`. Operator đọc nó rồi mới dựng 3 pod MySQL, 3 pod HAProxy, ổ đĩa và mật khẩu.
+
+`ps-db` không tự cài MySQL. Thiếu operator thì không ai đọc tờ đơn và không có gì được dựng. Vì vậy bước 4 đứng trước bước 5.
+
+Sau lệnh `helm install shop percona/ps-db ...`, operator đọc tờ đơn và viết ra 3 tờ xin ổ đĩa (PVC) cho 3 pod MySQL; `aws-ebs-csi-driver`, cài ở bước 8 của [runbook cluster](runbooks/runbook-shared-infrastructure.md), thấy 3 tờ xin đó và cần quyền gọi AWS, nên `eks-pod-identity-agent` cấp cho nó quyền tạm thời của IAM role mà eksctl đã tạo ở bước 8; có quyền rồi, driver gọi AWS tạo 3 ổ EBS và gắn mỗi ổ vào đúng worker node đang chạy pod MySQL tương ứng, tức mỗi node một ổ.
+
+**Bước 9, `kubectl apply -f backup.yaml`:** nộp một tờ đơn ghi "tôi muốn một bản backup của cụm `shop-ps-db`". Tờ đơn có `kind: PerconaServerMySQLBackup`, tên là `backup1`. Lệnh này không tự chạy backup: operator thấy tờ đơn rồi mới sao chép dữ liệu và đẩy lên S3.
+
+**Bước 11, `kubectl apply -f restore.yaml`:** nộp một tờ đơn ghi "hãy khôi phục cụm `shop-ps-db` từ `backup1`". Tờ đơn có `kind: PerconaServerMySQLRestore`, tên là `restore1`. Operator đọc nó rồi mới khôi phục.
+
+Mấy cái tên dễ lẫn:
+
+- **`perconaservermysqls` và `PerconaServerMySQL`** chỉ cùng một loại object. Tên đầu là tên của mẫu đơn (CRD), tên sau là `kind` ghi trong tờ đơn.
+- **`ps-operator` và `ps-db`** là tên hai chart của Helm. Chúng không phải CRD, cũng không phải custom resource.
+- **`ps` có hai nghĩa.** Trong `-n ps` nó là tên namespace. Trong `kubectl -n ps get ps` nó là tên tắt của loại object `PerconaServerMySQL`.
+- **CRD thuộc về cả cluster**, không nằm trong namespace `ps`. Vì vậy `kubectl get crd` không có `-n ps`, và lúc dọn phải xoá riêng 4 CRD.
+- **Operator chỉ theo dõi namespace nó được cài vào.** Vì vậy cụm MySQL, `backup1` và `restore1` đều nằm trong `ps`.
 
 ### Thứ tự dựng và dọn
 
